@@ -14,6 +14,7 @@ https://github.com/itsnotkubrick/3X-UI_KIT
 """
 
 import base64
+import http.client
 import http.server
 import json
 import os
@@ -65,7 +66,7 @@ def upstream(sub_id, ua, host, accept):
             return r.status, {k.lower(): v for k, v in r.getheaders()}, r.read()
     except urllib.error.HTTPError as e:
         return e.code, {k.lower(): v for k, v in e.headers.items()}, e.read()
-    except (urllib.error.URLError, OSError, socket.timeout) as e:
+    except (urllib.error.URLError, http.client.HTTPException, OSError, socket.timeout) as e:
         log(f"upstream недоступен: {e}")
         return None, {}, b""
 
@@ -164,6 +165,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         if self.command != "HEAD":
             self.wfile.write(body)
+
+    def send_error(self, code, message=None, explain=None):
+        # Свои короткие ответы вместо страницы ошибок Python: сканеру не видно, чем отвечает сервер.
+        self.close_connection = True
+        self.send_plain(code, f"{code} {self.responses.get(code, ('error',))[0].lower()}")
+
+    def do_other(self):
+        self.send_plain(404, "404 page not found")
+
+    do_POST = do_PUT = do_DELETE = do_PATCH = do_OPTIONS = do_other
 
     def do_HEAD(self):
         self.do_GET()

@@ -8,6 +8,9 @@
 # сумма проверяется), настраивает сертификат, сайт-заглушку, ufw и выдаёт
 # ссылку hy2:// с QR-кодом.
 
+# Запуск через sh (dash) ломается на непонятной ошибке синтаксиса – подскажем сразу.
+[ -n "${BASH_VERSION:-}" ] || { echo "Запустите через bash, а не через sh." >&2; exit 1; }
+
 set -Eeuo pipefail
 
 # На свежем VPS в фоне идут автообновления системы и держат замок dpkg: ждём его, а не падаем.
@@ -21,7 +24,7 @@ declare -A HY_SHA256=(
   [amd64]=8c7a68a906998b747a0db87586e364f995fbfddb95693ae6e2fdb68a6e920d3e
   [arm64]=c8dc653c3ba0a28d29a26b8fa52d2086f27c0927afddce95c09965e7174e78b0
 )
-KIT_VERSION="1.1.1"
+KIT_VERSION="1.1.2"
 KIT_REPO_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT"
 # Скрипт берём из тега релиза, а не из меняющейся ветки main.
 SELF_URL="$KIT_REPO_RAW/v$KIT_VERSION/scripts/hysteria2.sh"
@@ -220,14 +223,23 @@ tune_sysctl() {
   sysctl -q -p "$SYSCTL" 2>/dev/null || warn "Не удалось применить sysctl (так бывает в контейнерах) – на работу не влияет."
 }
 
+# Порты SSH, на которых сервер слушает сейчас (sshd, ss и порт текущего подключения):
+# ufw не должен запереть вас, в том числе на Ubuntu 24.04, где порт держит systemd.
+ssh_ports() {
+  { sshd -T 2>/dev/null | awk '$1 == "port" {print $2}'
+    ss -H -ltnp 2>/dev/null | awk '/"sshd"/ {n = split($4, a, ":"); print a[n]}'
+    awk '{print $4}' <<<"${SSH_CONNECTION:-}"
+  } | grep -E '^[0-9]{1,5}$' | sort -un || true
+}
+
 setup_ufw() {
   . "$STATE"
   [[ ${UFW:-yes} == yes ]] || return 0
-  local ssh_port
-  ssh_port=$(ss -H -ltnp 2>/dev/null | awk '/sshd/ {sub(/.*:/,"",$4); print $4; exit}')
+  local ssh_port p
+  ssh_port=$(ssh_ports)
   ssh_port=${ssh_port:-22}
-  say "Настраиваю ufw: SSH $ssh_port/tcp, Hysteria $PORT/udp${DOMAIN:+, сайт 80/tcp и $PORT/tcp}"
-  ufw allow "$ssh_port/tcp" >/dev/null
+  say "Настраиваю ufw: SSH $(tr '\n' ' ' <<<"$ssh_port")/tcp, Hysteria $PORT/udp${DOMAIN:+, сайт 80/tcp и $PORT/tcp}"
+  for p in $ssh_port; do ufw allow "$p/tcp" >/dev/null; done
   ufw allow "$PORT/udp" >/dev/null
   if [[ -n ${DOMAIN:-} ]]; then
     ufw allow 80/tcp >/dev/null
@@ -265,8 +277,17 @@ cmd_install() {
   check_os
   [[ -f $STATE ]] && die "Hysteria уже установлена этим скриптом. Команды управления: hy2 help"
 
-  local DOMAIN="" EMAIL="" PORT=443 USERNAME="admin" HOST="" UFW=yes SNI="" yes=no
+  local DOMAIN="" EMAIL="" PORT=443 USERNAME="admin" HOST="" UFW=yes SNI="" yes=no a args=()
+  # --port=8443 понимаем так же, как --port 8443
+  for a in "$@"; do
+    if [[ $a == --*=* ]]; then args+=("${a%%=*}" "${a#*=}"); else args+=("$a"); fi
+  done
+  set -- ${args[@]+"${args[@]}"}
   while [[ $# -gt 0 ]]; do
+    case $1 in
+      --domain | --email | --port | --user | --host | --sni)
+        [[ -n ${2-} ]] || die "У параметра $1 нет значения (см. hy2 help)" ;;
+    esac
     case $1 in
       --domain) DOMAIN=$2; shift 2 ;;
       --email) EMAIL=$2; shift 2 ;;
@@ -289,14 +310,23 @@ cmd_install() {
     if [[ -n $DOMAIN ]]; then read -rp "Почта для Let's Encrypt: " EMAIL; fi
   fi
   # Значения попадают в install.env и конфиг Hysteria – пропускаем только допустимые символы.
-  local re_host='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'
+  # Регистр и точка в конце не важны: Vpn.Example.com. – это vpn.example.com
+  local k
+  for k in DOMAIN SNI HOST; do
+    [[ -z ${!k} ]] || { local v=${!k//[[:space:]]/}; v=${v,,}; v=${v%.}; printf -v "$k" '%s' "$v"; }
+    [[ ${!k} != *://* && ${!k} != */* ]] || die "Нужно только имя, без https:// и без «/»: например vpn.example.com"
+    [[ ${!k} =~ ^[A-Za-z0-9.-]*$ ]] || die "Имя «${!k}» с не латинскими буквами не подойдёт: запишите его в виде punycode (xn--…)."
+  done
+  EMAIL=${EMAIL//[[:space:]]/}
+  local re_host='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})$'
   if [[ -n $DOMAIN ]]; then
     [[ $DOMAIN =~ $re_host ]] || die "Похоже, это не домен: $DOMAIN"
     [[ $EMAIL =~ ^[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,63}$ ]] || die "Для Let's Encrypt нужна почта: --email you@example.com"
   fi
   [[ -z $SNI || $SNI =~ $re_host ]] || die "--sni: нужно имя сайта, например www.bing.com"
-  [[ -z $HOST || $HOST =~ $re_host || $HOST =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "--host: нужен IP или домен"
-  [[ $PORT =~ ^[0-9]+$ ]] && ((PORT > 0 && PORT < 65536)) || die "Неверный порт: $PORT"
+  [[ -z $HOST || $HOST =~ $re_host || $HOST =~ ^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$ ]] || die "--host: нужен IP (например 1.2.3.4) или домен"
+  [[ $PORT =~ ^[0-9]{1,5}$ ]] && ((10#$PORT > 0 && 10#$PORT < 65536)) || die "Неверный порт: $PORT"
+  PORT=$((10#$PORT))
   [[ $USERNAME =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || die "Имя пользователя: латиница, цифры, _ . - (до 32 символов)."
 
   port_busy "$PORT" udp && die "UDP-порт $PORT уже занят. Выберите другой: --port 8443"
@@ -378,7 +408,7 @@ show_link() {
   echo
   echo "$link"
   echo
-  command -v qrencode >/dev/null && qrencode -t ANSIUTF8 -m 1 "$link"
+  if command -v qrencode >/dev/null; then qrencode -t ANSIUTF8 -m 1 "$link"; fi
 }
 
 reload_service() {

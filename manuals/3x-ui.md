@@ -135,7 +135,7 @@ kit version           # версии kit, панели и ядра, включе
 Сервер ставили версией 1.0? В ней команды `kit update` ещё нет, поэтому один раз:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.1.1/scripts/kit.sh -o /usr/local/bin/kit && chmod 755 /usr/local/bin/kit && kit update
+curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v1.1.2/scripts/kit.sh -o /usr/local/bin/kit && chmod 755 /usr/local/bin/kit && kit update
 ```
 
 Дальше обновления будут приходить сами.

@@ -6,10 +6,13 @@
 #   kit user list | link имя | limit имя [--gb N] [--days N] | off имя | on имя | del имя
 #   kit update [--auto | --manual] | kit backup | kit check | kit fix | kit version
 
+# Запуск через sh (dash) ломается на непонятной ошибке синтаксиса – подскажем сразу.
+[ -n "${BASH_VERSION:-}" ] || { echo "Запустите через bash, а не через sh." >&2; exit 1; }
+
 set -Eeuo pipefail
 export LC_ALL=C.UTF-8  # ширина колонок по символам, а не байтам
 
-KIT_VERSION="1.1.1"
+KIT_VERSION="1.1.2"
 KIT_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main"
 # Файлы новой версии берём из её тега, а не из меняющейся ветки main.
 kit_ref_raw() { echo "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v$1"; }
@@ -80,12 +83,19 @@ awg_attach() { # имя subId [лимит-байт] [срок-мс] [устро�
 clients() { api GET clients/list | jq -c 'if type == "array" then . else .clients end'; }
 client() { clients | jq -c --arg e "$1" 'map(select(.email == $e))[0] // empty'; }
 # Все записи пользователя: основная и «двойники» для AmneziaWG («имя-awgN»).
-emails_of() { clients | jq -r --arg e "$1" '.[] | select(.email == $e or (.email | test("^" + $e + "-awg[0-9]*$"))) | .email'; }
+emails_of() { clients | jq -r --arg e "$1" '.[] | select(.email == $e or ((.email | startswith($e + "-awg")) and (.email[($e | length) + 4:] | test("^[0-9]*$")))) | .email'; }
 valid_name() { [[ $1 =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || die "Имя: латиница, цифры, _ . - (до 32 символов)."; }
 rand_id() { openssl rand -base64 48 | tr -dc 'a-z0-9' | head -c 16; }
 
-gb_bytes() { [[ $1 =~ ^[0-9]+$ ]] || die "--gb: целое число гигабайт"; echo $(($1 * 1073741824)); }
-days_ms() { [[ $1 =~ ^[0-9]+$ ]] || die "--days: целое число дней"; ((${1} == 0)) && { echo 0; return; }; echo $((($(date +%s) + $1 * 86400) * 1000)); }
+# Числа из командной строки: «08» не должно читаться как восьмеричное, а 30 цифр – переполнять счёт.
+gb_bytes() { [[ ${1-} =~ ^[0-9]{1,6}$ ]] || die "--gb: целое число гигабайт (до 999999), например --gb 50"; echo $((10#$1 * 1073741824)); }
+days_ms() { [[ ${1-} =~ ^[0-9]{1,5}$ ]] || die "--days: целое число дней (до 99999), например --days 30"; ((10#$1 == 0)) && { echo 0; return; }; echo $((($(date +%s) + 10#$1 * 86400) * 1000)); }
+# Флаги вида --gb=50 превращаем в «--gb 50»; у флага без значения – понятная ошибка.
+eq_args() { # печатает аргументы по одному
+  local a
+  for a in "$@"; do if [[ $a == --*=* ]]; then printf '%s\n%s\n' "${a%%=*}" "${a#*=}"; else printf '%s\n' "$a"; fi; done
+}
+need_val() { [[ -n ${2-} ]] || die "У параметра $1 нет значения."; }
 
 human() { # байты → «1.2 ГБ»
   awk -v b="$1" 'BEGIN { split("Б КБ МБ ГБ ТБ", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ }
@@ -110,18 +120,23 @@ show_link() { # имя subId
 cmd_add() {
   local name=${1:-} gb=0 days=0 devices=0
   valid_name "$name"; shift
+  mapfile -t _args < <(eq_args "$@"); set -- ${_args[@]+"${_args[@]}"}
   while [[ $# -gt 0 ]]; do
     case $1 in
-      --gb) gb=$2; shift 2 ;;
-      --days) days=$2; shift 2 ;;
-      --devices) devices=$2; shift 2 ;;
+      --gb) need_val "$@"; gb=$2; shift 2 ;;
+      --days) need_val "$@"; days=$2; shift 2 ;;
+      --devices) need_val "$@"; devices=$2; shift 2 ;;
       *) die "Неизвестный параметр: $1" ;;
     esac
   done
+  [[ $devices =~ ^[0-9]{1,4}$ ]] || die "--devices: целое число"
+  devices=$((10#$devices))
   [[ -z $(client "$name") ]] || die "Пользователь $name уже есть. Ссылка: kit user link $name"
   local ids sid body
   ids=$(non_awg_ids)
   [[ $ids != "[]" ]] || die "На сервере нет подключений."
+  gb_bytes "$gb" >/dev/null; days_ms "$days" >/dev/null
+  gb=$((10#$gb)); days=$((10#$days))
   sid=$(rand_id)
   body=$(jq -nc --arg e "$name" --arg s "$sid" --argjson t "$(gb_bytes "$gb")" --argjson x "$(days_ms "$days")" \
     --argjson ip "$devices" --argjson ids "$ids" '{client: {email: $e, subId: $s, totalGB: $t, expiryTime: $x,
@@ -188,11 +203,12 @@ cmd_limit() {
   local name=${1:-} f="." gb="" days="" dev=""
   valid_name "$name"; shift
   [[ -n $(client "$name") ]] || die "Нет пользователя $name"
+  mapfile -t _args < <(eq_args "$@"); set -- ${_args[@]+"${_args[@]}"}
   while [[ $# -gt 0 ]]; do
     case $1 in
-      --gb) gb=$(gb_bytes "$2"); f+=" | .totalGB = \$gb"; shift 2 ;;
-      --days) days=$(days_ms "$2"); f+=" | .expiryTime = \$days"; shift 2 ;;
-      --devices) [[ $2 =~ ^[0-9]+$ ]] || die "--devices: целое число"; dev=$2; f+=" | .limitIp = \$dev"; shift 2 ;;
+      --gb) need_val "$@"; gb=$(gb_bytes "$2"); f+=" | .totalGB = \$gb"; shift 2 ;;
+      --days) need_val "$@"; days=$(days_ms "$2"); f+=" | .expiryTime = \$days"; shift 2 ;;
+      --devices) need_val "$@"; [[ $2 =~ ^[0-9]{1,4}$ ]] || die "--devices: целое число"; dev=$((10#$2)); f+=" | .limitIp = \$dev"; shift 2 ;;
       *) die "Неизвестный параметр: $1" ;;
     esac
   done
@@ -271,7 +287,7 @@ cmd_version() {
 # Что нового в версии $1 – из CHANGELOG.md, без разметки.
 changelog_of() {
   curl -fsS -m 5 "$KIT_RAW/CHANGELOG.md" 2>/dev/null | awk -v v="## v$1" '
-    index($0, v) == 1 { on = 1; t = substr($0, length(v) + 1); sub(/^[: ]+/, "", t); if (t != "") print t; next } on && /^## / { exit } on' | sed -E 's/ ?Спасибо \[[^]]*\]\([^)]*\)[^.]*\.//g; s/\[([^]]*)\]\([^)]*\)/\1/g; s/\*\*//g; s/`//g' | grep -v '^[[:space:]]*$' | head -40 || true
+    index($0, v) == 1 { on = 1; t = substr($0, length(v) + 1); sub(/^[: ]+/, "", t); if (t != "") print t; next } on && /^## / { exit } on' | sed -E 's/ ?Спасибо .*$//; s/\[([^]]*)\]\([^)]*\)/\1/g; s/\*\*//g; s/`//g' | grep -v '^[[:space:]]*$' | head -40 || true
 }
 
 # Скачивает релиз $1 в каталог $2 и проверяет: подпись SHA256SUMS нашим ключом, версию
@@ -446,16 +462,14 @@ cmd_update() {
     kit_sub_unit "$c" "$k" >/etc/systemd/system/kit-sub.service
     [[ -n $c ]] && echo '19 4 * * * root systemctl restart kit-sub >/dev/null 2>&1' >/etc/cron.d/kit-sub-cert
     systemctl daemon-reload
-    systemctl restart kit-sub
-    sleep 2
-    if sub_ok; then
+    if systemctl restart kit-sub && sleep 2 && sub_ok; then
       say "Подписка kit-sub обновлена и отвечает"
     else
       install -m 644 "$tmp/kit_sub.old" /usr/local/lib/kit-sub/kit_sub.py
       install -m 644 "$tmp/kit-sub.service.old" /etc/systemd/system/kit-sub.service
       grep -q '^LoadCredential=cert.pem' "$tmp/kit-sub.service.old" || rm -f /etc/cron.d/kit-sub-cert
       systemctl daemon-reload
-      systemctl restart kit-sub
+      systemctl restart kit-sub || true
       die "Новая подписка не ответила – вернул прежнюю, kit остался версии $KIT_VERSION. Лог: journalctl -u kit-sub -n 30"
     fi
   fi
@@ -532,7 +546,8 @@ check_cert() {
   local cert end left
   cert=$(awk '$1 == "ssl_certificate" {sub(/;$/, "", $2); print $2; exit}' /etc/nginx/conf.d/kit.conf 2>/dev/null || true)
   [[ -n $cert ]] || cert=$(jq -r '.cert // empty' /etc/kit-sub/config.json 2>/dev/null || true)
-  [[ -n $cert && -f $cert ]] || { c_info "сертификат для проверки не найден (режим без TLS)"; return 0; }
+  [[ -n $cert ]] || { c_info "сертификат не настроен (режим без TLS)"; return 0; }
+  [[ -f $cert ]] || { c_bad cert "файл сертификата $cert из настроек не найден"; return 0; }
   if ! openssl x509 -in "$cert" -noout -checkend 0 >/dev/null 2>&1; then
     c_bad cert "сертификат $cert просрочен"
   else
@@ -660,7 +675,7 @@ fix_action() { # код
       say "Возвращаю права 600 на файлы с паролями и ключами"
       local f
       for f in /etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /root/3x-ui.txt /root/cert/*/privkey.pem; do
-        [[ -f $f ]] && chmod 600 "$f"
+        if [[ -f $f ]]; then chmod 600 "$f"; fi
       done ;;
     cert)
       if nginx -t >/dev/null 2>&1; then say "Перечитываю сертификат в nginx"; systemctl reload nginx
@@ -775,7 +790,9 @@ ${B}kit${N} $KIT_VERSION – управление сервером 3X-UI KIT
 EOF
 }
 
-case "${1:-} ${2:-}" in
+# Регистр и «users» вместо «user» не должны ломать команду; имя пользователя (третье слово) не трогаем.
+cmd_key="${1:-} ${2:-}"; cmd_key=${cmd_key,,}; cmd_key=${cmd_key/users /user }
+case "$cmd_key" in
   "user add") shift 2; cmd_add "$@" ;;
   "user list") cmd_list; update_hint ;;
   "user link") shift 2; cmd_link "$@" ;;

@@ -10,6 +10,9 @@
 # с форматом под каждый клиент и настраивает ufw. Домены не нужны.
 # Каждый протокол проверен настоящими клиентами – см. tests/matrix.
 
+# Запуск через sh (dash) ломается на непонятной ошибке синтаксиса – подскажем сразу.
+[ -n "${BASH_VERSION:-}" ] || { echo "Запустите через bash, а не через sh." >&2; exit 1; }
+
 set -Eeuo pipefail
 
 # На свежем VPS в фоне идут автообновления системы и держат замок dpkg: ждём его, а не падаем.
@@ -28,7 +31,7 @@ wait_apt_idle() {
 XUI_VERSION="v3.8.5"
 # SHA256 установщика 3X-UI этой версии: тег могут передвинуть, а хеш – нет (проверено 2026-09-30).
 XUI_INSTALL_SHA256="4e3fe7fe00ef8e904ce6a0e9c36fd8a0c7179fe5e786f23e31801aee84c6347d"
-KIT_VERSION="1.1.1"
+KIT_VERSION="1.1.2"
 # kit и kit-sub берём из того же релиза, что и этот скрипт, а не из меняющейся ветки main.
 KIT_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v$KIT_VERSION"
 # Ядро Xray для панели. С 26.7.x клиенты на Mihomo и sing-box (Hiddify, FlClash,
@@ -146,20 +149,22 @@ choose_masking() {
   echo
   local d="" prev=""
   ask_tty "Ваш выбор [1]: " || return 0
-  [[ $REPLY == 2 ]] || { echo; return 0; }
+  REPLY=${REPLY//[[:space:]]/}
+  [[ ${REPLY%.} == 2 ]] || { echo; return 0; }
   while :; do
     if [[ -n $prev ]]; then ask_tty "Ваш домен [$prev]: " || return 0
     else ask_tty "Ваш домен, например vpn.example.com (пусто – стандартный сайт): " || return 0; fi
     d=${REPLY,,}; d=${d// /}
     [[ -n $d ]] || d=$prev
     [[ -n $d ]] || return 0
-    if [[ ! $d =~ $re_host ]]; then warn "Это не похоже на домен. Пример: vpn.example.com"; prev=""; continue; fi
+    if [[ ! $d =~ $re_host ]]; then warn "Это не похоже на домен (нужно только имя, без https://). Пример: vpn.example.com"; prev=""; continue; fi
     if domain_points_here "$d"; then DOMAIN=$d; return 0; fi
     prev=$d
     ask_tty "Enter – проверить ещё раз (DNS обновляется не сразу), s – стандартный сайт, q – выйти: " || return 0
+    REPLY=${REPLY//[[:space:]]/}
     case ${REPLY,,} in
-      s) return 0 ;;
-      q) die "Остановился по вашей просьбе. Ставить можно снова в любой момент." ;;
+      s | ы | с) return 0 ;;
+      q | й) die "Остановился по вашей просьбе. Ставить можно снова в любой момент." ;;
     esac
   done
 }
@@ -208,7 +213,8 @@ ip_cert_self_signed_fallback() {
   } >&2
   if [[ $yes == no && -t 1 ]] && { : </dev/tty; } 2>/dev/null; then
     ask_tty "Продолжить с самоподписанным сертификатом? [Y/n] " || REPLY=""
-    [[ ${REPLY,,} == n* ]] && return 1
+    REPLY=${REPLY//[[:space:]]/}
+    [[ ${REPLY,,} == n* || ${REPLY,,} == н* ]] && return 1
   else
     say "Продолжаю с самоподписанным сертификатом (без вопросов)."
   fi
@@ -277,6 +283,13 @@ ART
 }
 
 main() {
+  local a args=()
+  for a in "$@"; do
+    [[ $a == -h || $a == --help ]] && { usage; exit 0; }
+    # --port=8443 понимаем так же, как --port 8443
+    if [[ $a == --*=* ]]; then args+=("${a%%=*}" "${a#*=}"); else args+=("$a"); fi
+  done
+  set -- ${args[@]+"${args[@]}"}
   [[ $EUID -eq 0 ]] || die "Запустите от root: sudo -i, затем команду ещё раз."
   command -v systemctl >/dev/null || die "Нужен systemd."
   if [[ -f $RESULT && -x /usr/local/x-ui/x-ui ]]; then
@@ -303,6 +316,10 @@ main() {
   local PORT=443 SNI="" PANEL_SSL=auto HOST="" UFW=yes NAME="admin" yes=no protos=all ucert="" ukey="" multi=no
   while [[ $# -gt 0 ]]; do
     case $1 in
+      --port | --sni | --panel-ssl | --host | --user | --protocols | --domain | --cert | --key)
+        [[ -n ${2-} ]] || die "У параметра $1 нет значения (см. --help)" ;;
+    esac
+    case $1 in
       --port) PORT=$2; shift 2 ;;
       --sni) SNI=$2; shift 2 ;;
       --panel-ssl) PANEL_SSL=$2; shift 2 ;;
@@ -319,13 +336,24 @@ main() {
       *) die "Неизвестный параметр: $1 (см. --help)" ;;
     esac
   done
-  [[ $PORT =~ ^[0-9]+$ ]] && ((PORT > 0 && PORT < 65536)) || die "Неверный порт: $PORT"
-  local re_host='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]{2,63}$'
+  [[ $PORT =~ ^[0-9]{1,5}$ ]] && ((10#$PORT > 0 && 10#$PORT < 65536)) || die "Неверный порт: $PORT"
+  PORT=$((10#$PORT))
+  # Регистр и точка в конце не важны: vpn.Example.com. – это тот же vpn.example.com.
+  local k
+  for k in SNI DOMAIN HOST; do
+    [[ -z ${!k} ]] || { local v=${!k,,}; v=${v%.}; printf -v "$k" '%s' "$v"; }
+  done
+  PANEL_SSL=${PANEL_SSL,,}; protos=${protos,,}; protos=${protos// /}
+  local re_host='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})$'
+  for k in "$SNI" "$DOMAIN" "$HOST"; do
+    [[ $k != *://* && $k != */* ]] || die "Нужно только имя, без https:// и без «/»: например vpn.example.com"
+    [[ $k =~ ^[A-Za-z0-9.-]*$ ]] || die "Имя «$k» с не латинскими буквами не подойдёт: запишите его в виде punycode (xn--…), например через idn или в личном кабинете регистратора."
+  done
   [[ -z $SNI || $SNI =~ $re_host ]] || die "--sni: нужно имя сайта, например dl.google.com"
   [[ -z $DOMAIN || $DOMAIN =~ $re_host ]] || die "--domain: нужно имя вашего домена, например vpn.example.com"
   [[ -z $DOMAIN || -z $SNI ]] || die "--sni и --domain вместе не нужны: выберите либо чужой сайт (--sni), либо свой домен (--domain)."
   [[ -z $DOMAIN || $multi == no ]] || die "Свой домен работает только в режиме «всё на 443» – уберите --multi-port."
-  [[ -z $HOST || $HOST =~ $re_host || $HOST =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || die "--host: нужен IP или домен"
+  [[ -z $HOST || $HOST =~ $re_host || $HOST =~ ^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$ ]] || die "--host: нужен IP (например 1.2.3.4) или домен"
   [[ $NAME =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || die "Имя: латиница, цифры, _ . - (до 32 символов)."
   [[ $PANEL_SSL =~ ^(auto|ip|none)$ ]] || die "--panel-ssl: auto, ip или none"
   if [[ -n $ucert || -n $ukey ]]; then
@@ -340,6 +368,9 @@ main() {
        local x
        for x in "${PROTOS[@]}"; do [[ " ${ALL_PROTOS[*]} " == *" $x "* ]] || die "Неизвестный протокол: $x. Доступны: ${ALL_PROTOS[*]}"; done ;;
   esac
+  if [[ $multi == no && -d /etc/nginx ]] && grep -rqsE '^[[:space:]]*stream[[:space:]]*\{' /etc/nginx/nginx.conf /etc/nginx/conf.d /etc/nginx/sites-enabled /etc/nginx/streams-enabled 2>/dev/null; then
+    die "В вашем nginx уже есть блок stream: установщик в режиме «всё на 443» не сможет с ним ужиться. Запустите с --multi-port или уберите свой блок."
+  fi
   if port_busy "$PORT" tcp && ! { [[ -f $XUI_ENV ]] && ss -H -ltnp "sport = :$PORT" | grep -q -E 'xray|nginx'; }; then
     die "Порт $PORT/tcp уже занят. REALITY нужен свободный порт – укажите другой: --port 8443"
   fi
@@ -645,10 +676,19 @@ set_xray_core() {
   fi
 }
 
+# Порты SSH, на которых сервер слушает сейчас: из настроек sshd, из ss (в Ubuntu 24.04 порт держит
+# systemd, но сам sshd тоже в списке) и порт текущего подключения. Нужны, чтобы ufw не запер вас.
+ssh_ports() {
+  { sshd -T 2>/dev/null | awk '$1 == "port" {print $2}'
+    ss -H -ltnp 2>/dev/null | awk '/"sshd"/ {n = split($4, a, ":"); print a[n]}'
+    awk '{print $4}' <<<"${SSH_CONNECTION:-}"
+  } | grep -E '^[0-9]{1,5}$' | sort -un || true
+}
+
 setup_ufw() {
   local ssh_port o
-  ssh_port=$(ss -H -ltnp 2>/dev/null | awk '/sshd/ {sub(/.*:/,"",$4); print $4; exit}')
-  OPEN+=("${ssh_port:-22}/tcp")
+  ssh_port=$(ssh_ports)
+  for o in ${ssh_port:-22}; do OPEN+=("$o/tcp"); done
   say "Настраиваю ufw: ${OPEN[*]}"
   for o in "${OPEN[@]}"; do ufw allow "$o" >/dev/null; done
   ufw --force enable >/dev/null || warn "ufw не включился (так бывает в контейнерах) – откройте порты у хостера вручную."
@@ -663,7 +703,9 @@ setup_tls_cert() {
   elif [[ $PANEL_SSL == ip && -s /root/cert/ip/fullchain.pem ]]; then
     CERT=/root/cert/ip/fullchain.pem; KEY=/root/cert/ip/privkey.pem
     # Самоподписанный сертификат на IP: отпечаток уходит в ссылки, чтобы клиенты доверяли именно ему.
-    [[ $SELF_IP_CERT == yes ]] && PIN=$(openssl x509 -in "$CERT" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
+    if [[ $SELF_IP_CERT == yes ]]; then
+      PIN=$(openssl x509 -in "$CERT" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
+    fi
   else
     # Без Let's Encrypt – свой сертификат, а его отпечаток уходит в ссылки (pcs),
     # чтобы клиенты доверяли именно ему.
@@ -1195,7 +1237,13 @@ server {
 NGX
   fi
   grep -q 'kit-stream.conf' /etc/nginx/nginx.conf || echo 'include /etc/nginx/kit-stream.conf;' >>/etc/nginx/nginx.conf
-  nginx -t >/tmp/nginx-test.log 2>&1 || { cat /tmp/nginx-test.log >&2; die "nginx не принял конфиг – лог выше."; }
+  if ! nginx -t >/tmp/nginx-test.log 2>&1; then
+    cat /tmp/nginx-test.log >&2
+    # Наш include убираем, чтобы не оставить чужой nginx сломанным.
+    sed -i '/kit-stream\.conf/d' /etc/nginx/nginx.conf
+    rm -f /etc/nginx/kit-stream.conf
+    die "nginx не принял конфиг – лог выше. Если в вашем nginx уже есть блок stream, запустите установку с --multi-port."
+  fi
   systemctl enable nginx >/dev/null 2>&1
   systemctl restart nginx
   # Let's Encrypt на IP продлевается каждые несколько дней – nginx раз в сутки перечитывает сертификат.
