@@ -13,9 +13,10 @@ set -Eeuo pipefail
 export LC_ALL=C.UTF-8  # ширина колонок по символам, а не байтам
 
 KIT_VERSION="1.1.2"
-KIT_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main"
-# Файлы новой версии берём из её тега, а не из меняющейся ветки main.
-kit_ref_raw() { echo "https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v$1"; }
+KIT_REPO="${KIT_REPO:-Qislord/3X-UI_KIT_SING_BOX}"
+KIT_BRANCH="${KIT_BRANCH:-main}"
+KIT_RAW="${KIT_RAW:-https://raw.githubusercontent.com/$KIT_REPO/$KIT_BRANCH}"
+kit_ref_raw() { echo "https://raw.githubusercontent.com/$KIT_REPO/v$1"; }
 
 XUI_ENV=/etc/x-ui/install-result.env
 KIT_ENV=/etc/kit/kit.env
@@ -50,6 +51,14 @@ api() { # METHOD path [json]
   fi
   [[ $(jq -r '.success' <<<"$out" 2>/dev/null) == true ]] || die "Панель ответила ошибкой: $(jq -r '.msg // .' <<<"$out" 2>/dev/null | head -c 300)"
   jq -c '.obj' <<<"$out"
+}
+
+portal_py() {
+  local p="/usr/local/lib/kit-portal/kit_portal.py"
+  [[ -f $p ]] || p="$(dirname "${BASH_SOURCE[0]}")/kit-portal.py"
+  if [[ -f $p ]]; then
+    python3 "$p" "$@"
+  fi
 }
 
 # В 3X-UI 3.x у клиента одна запись и в ней одна пара ключей WireGuard и один адрес. Если
@@ -143,7 +152,27 @@ cmd_add() {
     limitIp: $ip, enable: true, comment: "kit"}, inboundIds: $ids}')
   api POST clients/add "$body" >/dev/null
   awg_attach "$name" "$sid" "$(gb_bytes "$gb")" "$(days_ms "$days")" "$devices"
+
+  local portal_out pwd purl sing_sub
+  portal_out=$(portal_py user add "$name" --sub-id "$sid" 2>/dev/null || true)
+  if [[ -n $portal_out ]] && jq -e '.username' <<<"$portal_out" >/dev/null 2>&1; then
+    pwd=$(jq -r '.password // empty' <<<"$portal_out")
+    purl=$(jq -r '.portal_url // empty' <<<"$portal_out")
+    sing_sub=$(jq -r '.singbox_sub_url // empty' <<<"$portal_out")
+  fi
+
   say "Пользователь $name добавлен во все протоколы ($(api GET inbounds/list | jq length))$( ((gb)) && echo ", лимит $gb ГБ")$( ((days)) && echo ", на $days дн")."
+
+  if [[ -n ${pwd:-} ]]; then
+    echo
+    echo "${B}Личный кабинет пользователя:${N}"
+    echo "  Адрес:   ${G}$purl${N}"
+    echo "  Логин:   ${B}$name${N}"
+    echo "  Пароль:  ${Y}$pwd${N}"
+    echo
+    echo "${B}Подписка Sing-box (DoH 1.1.1.1 + обход РФ сайтов):${N}"
+    echo "  $sing_sub"
+  fi
   show_link "$name" "$sid"
 }
 
@@ -220,6 +249,7 @@ cmd_toggle() { # имя true|false
   valid_name "$1"
   [[ -n $(client "$1") ]] || die "Нет пользователя $1"
   update_user "$1" ".enable = \$v" --argjson v "$2"
+  portal_py user toggle "$1" "$([ "$2" == true ] && echo 1 || echo 0)" >/dev/null 2>&1 || true
   if [[ $2 == true ]]; then say "Пользователь $1 включён."; else say "Пользователь $1 выключен – подписка и подключения не работают."; fi
 }
 
@@ -233,7 +263,27 @@ cmd_del() {
   fi
   local e
   for e in $(emails_of "$name"); do api POST "clients/del/$e" >/dev/null; done
-  say "Пользователь $name удалён, его подписка больше не работает."
+  portal_py user del "$name" >/dev/null 2>&1 || true
+  say "Пользователь $name удалён, его подписка и доступ в кабинет больше не работают."
+}
+
+cmd_passwd() { # имя [новый_пароль]
+  local name=${1:-} pwd=${2:-} out
+  valid_name "$name"
+  [[ -n $(client "$name") ]] || die "Нет пользователя $name"
+  if [[ -z $pwd ]]; then
+    pwd=$(openssl rand -base64 12 | tr -dc 'A-Za-z0-9!@#$%' | head -c 16)
+  fi
+  out=$(portal_py user passwd "$name" "$pwd" 2>/dev/null || true)
+  say "Пароль для пользователя $name в личном кабинете изменен: ${Y}$pwd${N}"
+}
+
+cmd_token() { # имя
+  local name=${1:-} out
+  valid_name "$name"
+  [[ -n $(client "$name") ]] || die "Нет пользователя $name"
+  out=$(portal_py user token "$name" 2>/dev/null || true)
+  say "Токен Sing-box для $name обновлен: $(jq -r '.singbox_sub_url // empty' <<<"$out")"
 }
 
 # ---------- версия и обновление ----------
@@ -526,6 +576,11 @@ check_services() {
       c_bad svc:kit-sub "служба kit-sub не работает (journalctl -u kit-sub -n 50)"
     fi
   fi
+  if systemctl is-active -q kit-portal 2>/dev/null; then
+    c_ok "служба kit-portal работает"
+  elif systemctl list-unit-files kit-portal.service 2>/dev/null | grep -q kit-portal; then
+    c_bad svc:kit-portal "служба kit-portal не работает (journalctl -u kit-portal -n 50)"
+  fi
   if auto_enabled; then c_ok "автообновление включено"
   elif [[ -f $KIT_MANUAL ]]; then c_info "автообновление выключено вами (включить: kit update --auto)"
   else c_bad timer "автообновление не включено"; fi
@@ -573,7 +628,7 @@ check_exposure() {
       if ufw status | grep -Eq '^443/tcp +ALLOW'; then c_ok "ufw пропускает 443/tcp"; else c_bad "" "ufw не пропускает 443/tcp: ufw allow 443/tcp"; fi
     fi
   fi
-  for f in /etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /root/3x-ui.txt /root/cert/*/privkey.pem; do
+  for f in /etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /etc/kit/portal.db /root/3x-ui.txt /root/cert/*/privkey.pem; do
     [[ -f $f ]] || continue
     m=$(stat -c %a "$f")
     [[ $m == 600 ]] || { c_bad perms "права на $f: $m (нужно 600)"; bad=1; }
@@ -663,6 +718,7 @@ fix_action() { # код
       if nginx -t >/dev/null 2>&1; then say "Перезапускаю nginx"; systemctl restart nginx
       else warn "Конфиг nginx не проходит проверку (nginx -t) – не трогаю, чтобы не сломать сервер."; fi ;;
     svc:kit-sub) say "Перезапускаю kit-sub"; systemctl restart kit-sub; sleep 2 ;;
+    svc:kit-portal) say "Перезапускаю kit-portal"; systemctl restart kit-portal; sleep 2 ;;
     subtls)
       say "Убираю сертификат у встроенной подписки 3X-UI (TLS снимает nginx, kit-sub ходит по http)"
       local all upd
@@ -674,7 +730,7 @@ fix_action() { # код
     perms)
       say "Возвращаю права 600 на файлы с паролями и ключами"
       local f
-      for f in /etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /root/3x-ui.txt /root/cert/*/privkey.pem; do
+      for f in /etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /etc/kit/portal.db /root/3x-ui.txt /root/cert/*/privkey.pem; do
         if [[ -f $f ]]; then chmod 600 "$f"; fi
       done ;;
     cert)
@@ -727,7 +783,7 @@ cmd_fix() {
 # Что входит в копию: база панели (пользователи,
 # ключи, подключения), настройки kit и kit-sub, nginx, сайт-заглушка, свои сертификаты.
 # Сертификаты Let's Encrypt (на IP и на свой домен) не берём: на новом сервере он выпускается заново.
-BACKUP_PATHS=(/etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json
+BACKUP_PATHS=(/etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /etc/kit/portal.db
   /etc/nginx/kit-stream.conf /etc/nginx/conf.d/kit.conf /var/www/kit /root/cert/self /root/cert/custom /root/3x-ui.txt)
 
 cmd_backup() {
@@ -773,10 +829,12 @@ usage() {
 ${B}kit${N} $KIT_VERSION – управление сервером 3X-UI KIT
 
 Пользователи (один пользователь сразу на всех протоколах):
-  kit user add имя [--gb 50] [--days 30] [--devices 3]   добавить и показать подписку
+  kit user add имя [--gb 50] [--days 30] [--devices 3]   добавить, создать аккаунт портала и подписку
   kit user list                                           трафик, срок, статус
   kit user link имя [--all]                               подписка и QR; --all – ещё vpn:// и tg://
   kit user limit имя [--gb N] [--days N] [--devices N]    изменить лимиты (0 – без ограничений)
+  kit user passwd имя [пароль]                            сменить пароль в личном кабинете
+  kit user token имя                                      сбросить ссылку на подписку Sing-box
   kit user off имя  /  kit user on имя                    выключить и включить
   kit user del имя                                        удалить
 
@@ -797,6 +855,8 @@ case "$cmd_key" in
   "user list") cmd_list; update_hint ;;
   "user link") shift 2; cmd_link "$@" ;;
   "user limit") shift 2; cmd_limit "$@" ;;
+  "user passwd") shift 2; cmd_passwd "$@" ;;
+  "user token") shift 2; cmd_token "$@" ;;
   "user off") cmd_toggle "${3:-}" false ;;
   "user on") cmd_toggle "${3:-}" true ;;
   "user del") shift 2; cmd_del "$@" ;;

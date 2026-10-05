@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Личный кабинет | skip-flash</title>
+  <meta name="description" content="Личный кабинет доступа к частному прокси-шлюзу и подписке Sing-box">
+  <meta name="robots" content="noindex, nofollow">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Фоновые неоновые блики -->
+  <div class="bg-glow bg-glow-1"></div>
+  <div class="bg-glow bg-glow-2"></div>
+
+  <!-- Верхняя панель (Header) -->
+  <header class="app-header">
+    <div class="container header-container">
+      <div class="brand">
+        <span class="brand-icon">⚡</span>
+        <span class="brand-name" id="portalBrandTitle">skip-flash</span>
+        <span class="brand-tag">GATEWAY</span>
+      </div>
+      <div class="header-status">
+        <span class="status-dot"></span>
+        <span class="status-text">Шлюз активен</span>
+      </div>
+      <div class="header-auth" id="headerAuth" hidden>
+        <span class="user-pill">
+          <span class="user-icon">👤</span>
+          <span class="username" id="headerUsername">user</span>
+        </span>
+        <button type="button" class="btn btn-sm btn-ghost" id="logoutBtn" title="Выйти из аккаунта">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
+          Выйти
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="app-main">
+    <div class="container">
+
+      <!-- ================= 1. ЭКРАН АВТОРИЗАЦИИ (LOGIN) ================= -->
+      <section class="auth-section" id="loginView">
+        <div class="auth-card">
+          <div class="auth-header">
+            <div class="shield-badge">🔒</div>
+            <h1 class="auth-title">Авторизация</h1>
+            <p class="auth-subtitle">Вход для доступа к персональной подписке и параметрам маршрутизации</p>
+          </div>
+
+          <form id="loginForm" class="auth-form" autocomplete="on">
+            <div class="alert alert-danger" id="loginAlert" role="alert" hidden></div>
+
+            <div class="form-group">
+              <label for="usernameInput" class="form-label">Имя пользователя</label>
+              <div class="input-wrap">
+                <span class="input-icon">👤</span>
+                <input type="text" id="usernameInput" class="form-control" placeholder="Логин" required autofocus autocomplete="username">
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label for="passwordInput" class="form-label">Пароль</label>
+              <div class="input-wrap">
+                <span class="input-icon">🔑</span>
+                <input type="password" id="passwordInput" class="form-control" placeholder="Пароль" required autocomplete="current-password">
+                <button type="button" class="btn-toggle-eye" id="togglePasswordBtn" aria-label="Показать пароль">👁️</button>
+              </div>
+            </div>
+
+            <button type="submit" class="btn btn-primary btn-block btn-lg" id="submitLoginBtn">
+              <span class="btn-text">Войти в кабинет</span>
+              <span class="btn-spinner" hidden></span>
+            </button>
+          </form>
+
+          <div class="auth-footer">
+            <div class="security-chip">
+              <span>🛡️ 256-bit TLS · Защищенное соединение · Strict Session</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ================= 2. ЛИЧНЫЙ КАБИНЕТ (DASHBOARD) ================= -->
+      <section class="dashboard-section" id="dashboardView" hidden>
+
+        <!-- Приветствие и карточки статистики -->
+        <div class="stats-grid">
+          <div class="card stat-card">
+            <div class="stat-icon-wrap stat-icon-status">🟢</div>
+            <div class="stat-content">
+              <span class="stat-label">Статус аккаунта</span>
+              <span class="stat-value text-success" id="accountStatusText">Активен</span>
+              <span class="stat-sub" id="accountUserComment">Все протоколы онлайн</span>
+            </div>
+          </div>
+
+          <div class="card stat-card">
+            <div class="stat-icon-wrap stat-icon-traffic">📊</div>
+            <div class="stat-content">
+              <span class="stat-label">Расход трафика</span>
+              <span class="stat-value" id="trafficUsedText">0 МБ / ∞</span>
+              <div class="progress-bar-wrap">
+                <div class="progress-bar" id="trafficProgressBar" style="width: 0%"></div>
+              </div>
+              <span class="stat-sub" id="trafficPercentText">0% использовано</span>
+            </div>
+          </div>
+
+          <div class="card stat-card">
+            <div class="stat-icon-wrap stat-icon-days">⏳</div>
+            <div class="stat-content">
+              <span class="stat-label">Срок действия</span>
+              <span class="stat-value" id="expireDateText">Бессрочно</span>
+              <span class="stat-sub" id="daysLeftText">Без ограничений</span>
+            </div>
+          </div>
+
+          <div class="card stat-card">
+            <div class="stat-icon-wrap stat-icon-proto">⚡</div>
+            <div class="stat-content">
+              <span class="stat-label">Отказоустойчивость</span>
+              <span class="stat-value">Мульти-протокол</span>
+              <span class="stat-sub">VLESS Reality · Hy2 · TUIC · SS</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Главный блок Sing-box подписки -->
+        <div class="card featured-card">
+          <div class="featured-glow"></div>
+          <div class="featured-badge-row">
+            <span class="badge badge-accent">⭐ Основной способ подключения</span>
+            <span class="badge badge-success">DNS DoH 1.1.1.1</span>
+            <span class="badge badge-info">Обход РФ-сайтов</span>
+          </div>
+
+          <h2 class="featured-title">Подписка Sing-box (Умная маршрутизация)</h2>
+          <p class="featured-desc">
+            Все серверы упакованы в единую стратегию: автоматический выбор быстрого протокола, прямое открытие российских сервисов и банков, блокировка рекламы и QUIC для стабильного YouTube.
+          </p>
+
+          <!-- Поле ссылки подписки -->
+          <div class="sub-link-box">
+            <label class="field-label" for="subUrlInput">Ссылка на JSON-подписку (Remote Profile):</label>
+            <div class="copy-input-group">
+              <input type="text" id="subUrlInput" class="form-control mono-font" readonly spellcheck="false">
+              <button type="button" class="btn btn-primary" id="copySubBtn" title="Скопировать ссылку">
+                <span class="copy-icon">📋</span>
+                <span class="copy-label">Скопировать</span>
+              </button>
+            </div>
+          </div>
+
+          <!-- Кнопки действий -->
+          <div class="action-buttons-row">
+            <button type="button" class="btn btn-secondary" id="qrBtn">
+              <span>📱</span> Показать QR-код
+            </button>
+            <button type="button" class="btn btn-secondary" id="copyJsonBtn">
+              <span>📄</span> Скопировать сырой JSON
+            </button>
+            <button type="button" class="btn btn-outline-danger" id="rotateTokenBtn" title="Сбросить ссылку, если старая скомпрометирована">
+              <span>🔄</span> Сбросить ссылку
+            </button>
+          </div>
+
+          <!-- Преимущества конфигурации -->
+          <div class="rules-chips-grid">
+            <div class="rule-chip">
+              <span class="rule-icon">🛡️</span>
+              <span class="rule-text"><b>DNS DoH 1.1.1.1:</b> Запросы зашифрованы Cloudflare, без утечек провайдеру</span>
+            </div>
+            <div class="rule-chip">
+              <span class="rule-icon">🇷🇺</span>
+              <span class="rule-text"><b>Прямой доступ к РФ:</b> Госуслуги, банки, Кинопоиск работают без VPN</span>
+            </div>
+            <div class="rule-chip">
+              <span class="rule-icon">🎬</span>
+              <span class="rule-text"><b>Block UDP 443:</b> Блокировка QUIC для плавной загрузки 4K видео</span>
+            </div>
+            <div class="rule-chip">
+              <span class="rule-icon">🧲</span>
+              <span class="rule-text"><b>Bypass BitTorrent:</b> Торренты идут мимо VPS, защищая сервер от абуз</span>
+            </div>
+            <div class="rule-chip">
+              <span class="rule-icon">🏠</span>
+              <span class="rule-text"><b>Direct LAN:</b> Доступ к домашнему роутеру и принтерам без отключения</span>
+            </div>
+            <div class="rule-chip">
+              <span class="rule-icon">⚡</span>
+              <span class="rule-text"><b>Auto URLTest:</b> Автоматическое переключение, если протокол глушится</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Интерактивные инструкции по клиентам -->
+        <div class="card guides-card">
+          <h3 class="section-title">Как подключиться: Инструкции для ваших устройств</h3>
+          <p class="section-subtitle">Выберите вашу операционную систему для пошаговой настройки</p>
+
+          <div class="platform-tabs" role="tablist">
+            <button type="button" class="tab-btn active" data-tab="tab-ios">🍏 iOS / iPad</button>
+            <button type="button" class="tab-btn" data-tab="tab-android">🤖 Android</button>
+            <button type="button" class="tab-btn" data-tab="tab-windows">🪟 Windows</button>
+            <button type="button" class="tab-btn" data-tab="tab-macos">🍎 macOS</button>
+          </div>
+
+          <!-- Контент табов -->
+          <div class="tab-content active" id="tab-ios">
+            <div class="guide-steps-grid">
+              <div class="step-card">
+                <span class="step-number">1</span>
+                <h4>Установите приложение</h4>
+                <p>Рекомендуем официальный <b>Sing-box</b> или <b>Karing</b> из App Store.</p>
+                <div class="app-links">
+                  <a href="https://apps.apple.com/app/sing-box-vt/id6451272673" target="_blank" rel="noopener" class="app-link-badge">Sing-box (App Store)</a>
+                  <a href="https://apps.apple.com/app/karing/id6472431552" target="_blank" rel="noopener" class="app-link-badge">Karing (App Store)</a>
+                </div>
+              </div>
+              <div class="step-card">
+                <span class="step-number">2</span>
+                <h4>Добавьте подписку</h4>
+                <p>В приложении перейдите в <b>Profiles</b> → нажмите <b>«+»</b> → выберите <b>Remote Profile</b> (Новый URL) → вставьте скопированную ссылку подписки.</p>
+              </div>
+              <div class="step-card">
+                <span class="step-number">3</span>
+                <h4>Включите защиту</h4>
+                <p>Вернитесь на главный экран, активируйте тумблер соединения и подтвердите добавление конфигурации VPN в iOS.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="tab-android">
+            <div class="guide-steps-grid">
+              <div class="step-card">
+                <span class="step-number">1</span>
+                <h4>Установите клиент</h4>
+                <p>Установите <b>Sing-box</b>, <b>Hiddify</b> или <b>NekoBox</b> из Google Play или GitHub.</p>
+                <div class="app-links">
+                  <a href="https://play.google.com/store/apps/details?id=io.nekohasekai.sfa" target="_blank" rel="noopener" class="app-link-badge">Sing-box (Play Market)</a>
+                  <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener" class="app-link-badge">Hiddify (GitHub)</a>
+                </div>
+              </div>
+              <div class="step-card">
+                <span class="step-number">2</span>
+                <h4>Импортируйте профиль</h4>
+                <p>Нажмите <b>Profiles</b> → добавьте <b>Remote Profile</b> → вставьте ссылку (или отсканируйте QR-код выше).</p>
+              </div>
+              <div class="step-card">
+                <span class="step-number">3</span>
+                <h4>Запустите режим TUN</h4>
+                <p>Выберите режим <b>Rule (По правилам)</b> и нажмите большую круглую кнопку старта.</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="tab-windows">
+            <div class="guide-steps-grid">
+              <div class="step-card">
+                <span class="step-number">1</span>
+                <h4>Скачайте клиент</h4>
+                <p>Для Windows отлично подходят <b>Hiddify</b>, <b>Karing</b> или <b>Sing-box GUI</b>.</p>
+                <div class="app-links">
+                  <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener" class="app-link-badge">Hiddify Windows (.exe)</a>
+                  <a href="https://github.com/KaringX/karing/releases" target="_blank" rel="noopener" class="app-link-badge">Karing (.exe)</a>
+                </div>
+              </div>
+              <div class="step-card">
+                <span class="step-number">2</span>
+                <h4>Вставьте ссылку</h4>
+                <p>Нажмите «Новый профиль» / «Добавить из буфера» → вставьте ссылку на подписку.</p>
+              </div>
+              <div class="step-card">
+                <span class="step-number">3</span>
+                <h4>Включите Режим TUN</h4>
+                <p>В настройках клиента обязательно включите <b>TUN Mode (Системный VPN)</b> и нажмите «Подключить».</p>
+              </div>
+            </div>
+          </div>
+
+          <div class="tab-content" id="tab-macos">
+            <div class="guide-steps-grid">
+              <div class="step-card">
+                <span class="step-number">1</span>
+                <h4>Установите Sing-box</h4>
+                <p>Скачайте <b>Sing-box</b> из Mac App Store или <b>Karing</b> для macOS.</p>
+                <div class="app-links">
+                  <a href="https://apps.apple.com/app/sing-box-vt/id6451272673" target="_blank" rel="noopener" class="app-link-badge">Sing-box (Mac App Store)</a>
+                  <a href="https://github.com/KaringX/karing/releases" target="_blank" rel="noopener" class="app-link-badge">Karing (.dmg)</a>
+                </div>
+              </div>
+              <div class="step-card">
+                <span class="step-number">2</span>
+                <h4>Добавьте URL профиля</h4>
+                <p>В меню Profiles вставьте ссылку на подписку, выберите интервал автообновления 24 часа.</p>
+              </div>
+              <div class="step-card">
+                <span class="step-number">3</span>
+                <h4>Старт соединения</h4>
+                <p>Активируйте соединение в строке меню macOS. Все правила применятся системно.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Карточка настроек безопасности и смены пароля -->
+        <div class="card settings-card">
+          <h3 class="section-title">Безопасность профиля</h3>
+          <p class="section-subtitle">Вы можете изменить пароль для входа в этот личный кабинет</p>
+
+          <form id="changePasswordForm" class="settings-form">
+            <div class="alert alert-info" id="passwordAlert" role="alert" hidden></div>
+            <div class="password-form-grid">
+              <div class="form-group">
+                <label for="oldPasswordInput" class="form-label">Текущий пароль</label>
+                <input type="password" id="oldPasswordInput" class="form-control" required placeholder="Введите старый пароль">
+              </div>
+              <div class="form-group">
+                <label for="newPasswordInput" class="form-label">Новый пароль (мин. 8 символов)</label>
+                <input type="password" id="newPasswordInput" class="form-control" required minlength="8" placeholder="Придумайте надежный пароль">
+              </div>
+              <div class="form-group align-end">
+                <button type="submit" class="btn btn-secondary" id="savePasswordBtn">
+                  <span>💾</span> Сохранить пароль
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+
+      </section>
+
+    </div>
+  </main>
+
+  <!-- ================= МОДАЛЬНЫЕ ОКНА ================= -->
+
+  <!-- Модальное окно QR-кода -->
+  <div class="modal-backdrop" id="qrModal" hidden>
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3 class="modal-title">QR-код подписки</h3>
+        <button type="button" class="btn-close" id="closeQrModalBtn" aria-label="Закрыть">&times;</button>
+      </div>
+      <div class="modal-body text-center">
+        <p class="modal-hint">Наведите камеру в приложении Sing-box, Hiddify или Karing:</p>
+        <div class="qr-container" id="qrCanvasBox"></div>
+        <p class="qr-sub-text mono-font" id="qrTextValue"></p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-primary" id="copyFromQrBtn">Скопировать ссылку</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Всплывающие уведомления (Toast) -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- Футер -->
+  <footer class="app-footer">
+    <div class="container footer-container">
+      <p>© <span id="currentYear"></span> skip-flash. Все права защищены. Приватный шлюз.</p>
+    </div>
+  </footer>
+
+  <script src="qr.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

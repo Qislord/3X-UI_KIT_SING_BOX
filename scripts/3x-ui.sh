@@ -32,8 +32,9 @@ XUI_VERSION="v3.8.5"
 # SHA256 установщика 3X-UI этой версии: тег могут передвинуть, а хеш – нет (проверено 2026-09-30).
 XUI_INSTALL_SHA256="4e3fe7fe00ef8e904ce6a0e9c36fd8a0c7179fe5e786f23e31801aee84c6347d"
 KIT_VERSION="1.1.2"
-# kit и kit-sub берём из того же релиза, что и этот скрипт, а не из меняющейся ветки main.
-KIT_RAW="https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/v$KIT_VERSION"
+KIT_REPO="${KIT_REPO:-Qislord/3X-UI_KIT_SING_BOX}"
+KIT_BRANCH="${KIT_BRANCH:-main}"
+KIT_RAW="${KIT_RAW:-https://raw.githubusercontent.com/$KIT_REPO/$KIT_BRANCH}"
 # Ядро Xray для панели. С 26.7.x клиенты на Mihomo и sing-box (Hiddify, FlClash,
 # Clash Verge, Mihomo в XKeen) не проходят REALITY – проверено 2026-09-25.
 # 26.6.27 – последняя версия, с которой работают все клиенты и которую принимает 3X-UI.
@@ -61,12 +62,13 @@ declare -A PORTS=([xhttp]=8443 [ws]=2053 [trojan]=2083 [vmess]=2087 [ss]=8388 [t
 PROTOS=(); CREATED=(); OPEN=()
 # Режим «всё TCP на 443»: nginx разводит по SNI и путям, подключения слушают только localhost.
 SINGLE=no
-declare -A INNER=([reality]=10443 [xhttp]=10444 [mtproto]=10445 [web]=10446 [selfweb]=10447 [ws]=10451 [vmess]=10452 [trojan]=10453 [sub]=10460)
+declare -A INNER=([reality]=10443 [xhttp]=10444 [mtproto]=10445 [web]=10446 [selfweb]=10447 [ws]=10451 [vmess]=10452 [trojan]=10453 [sub]=10460 [portal]=10465)
 SNI2=""; SNI3=""
 # Свой домен (self-steal): REALITY маскируется под сайт на этом же сервере, а не под чужой.
 DOMAIN=""
 DOMAIN_CERT_DIR=/root/cert/domain
 SELF_IP_CERT=no   # yes – сертификат на IP самоподписанный (Let's Encrypt отказал, пользователь согласился)
+PORTAL_USER_PASS=""; PORTAL_USER_URL=""; PORTAL_SINGBOX_SUB=""
 
 if [[ -t 1 ]]; then
   G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
@@ -298,8 +300,8 @@ main() {
   # Панель удалили через меню x-ui, а наши файлы остались – убираем их и ставим заново.
   if [[ -f $RESULT ]]; then
     warn "Панель 3X-UI удалена, но остались файлы прошлой установки – убираю их."
-    systemctl disable --now kit-sub kit-update.timer >/dev/null 2>&1 || true
-    rm -rf /etc/systemd/system/kit-sub.service /etc/systemd/system/kit-update.service /etc/systemd/system/kit-update.timer /usr/local/lib/kit-sub /etc/kit-sub /etc/kit /usr/local/bin/kit \
+    systemctl disable --now kit-sub kit-portal kit-update.timer >/dev/null 2>&1 || true
+    rm -rf /etc/systemd/system/kit-sub.service /etc/systemd/system/kit-portal.service /etc/systemd/system/kit-update.service /etc/systemd/system/kit-update.timer /usr/local/lib/kit-sub /usr/local/lib/kit-portal /etc/kit-sub /etc/kit /usr/local/bin/kit \
       /etc/cron.d/kit-nginx-reload /etc/cron.d/kit-xui-menu /etc/cron.d/kit-sub-cert "$RESULT"
     systemctl daemon-reload
     # Наш nginx держит 443 – без этого проверка порта ниже не пустит REALITY.
@@ -506,6 +508,7 @@ main() {
 
   # --- подписка: ссылки, Clash/Mihomo и JSON с автоопределением клиента ---
   setup_subscription
+  install_kit_portal
   [[ $SINGLE == yes ]] && setup_nginx
   install_kit_cli
   brand_xui_menu
@@ -541,10 +544,20 @@ main() {
   {
     echo "3X-UI KIT (3X-UI $XUI_VERSION) – данные для входа (файл виден только root)"
     echo
-    echo "Панель:  $panel_url"
-    echo "Логин:   $XUI_USERNAME"
-    echo "Пароль:  $XUI_PASSWORD"
+    echo "Админ-панель: $panel_url"
+    echo "Логин:        $XUI_USERNAME"
+    echo "Пароль:       $XUI_PASSWORD"
     echo
+    if [[ -n ${PORTAL_USER_PASS:-} ]]; then
+      echo "Личный кабинет пользователя ($NAME):"
+      echo "  Адрес:      $PORTAL_USER_URL"
+      echo "  Логин:      $NAME"
+      echo "  Пароль:     $PORTAL_USER_PASS"
+      echo
+      echo "Подписка Sing-box (DoH 1.1.1.1 + обход РФ сайтов):"
+      echo "  $PORTAL_SINGBOX_SUB"
+      echo
+    fi
     [[ $TRUSTED == yes ]] && { echo "Подписка ($NAME) – все протоколы одной ссылкой:"; echo "$SUB_URL"; echo; }
     echo "Отдельные подключения ($NAME):"
     echo "$links"
@@ -557,10 +570,20 @@ main() {
   [[ -n $DOMAIN ]] && echo "Маскировка: свой домен ${B}$DOMAIN${N}, сертификат Let's Encrypt продлевается сам."
   [[ $SELF_IP_CERT == yes ]] && echo "${Y}Сертификат на IP самоподписанный:${N} используйте ссылки на отдельные подключения из /root/3x-ui.txt, подписка в приложениях может не открыться."
   echo
-  echo "Панель:  ${B}$panel_url${N}"
-  echo "Логин:   ${B}$XUI_USERNAME${N}"
-  echo "Пароль:  ${B}$XUI_PASSWORD${N}"
+  echo "Админ-панель: ${B}$panel_url${N}"
+  echo "Логин:        ${B}$XUI_USERNAME${N}"
+  echo "Пароль:       ${B}$XUI_PASSWORD${N}"
   echo
+  if [[ -n ${PORTAL_USER_PASS:-} ]]; then
+    echo "${B}Личный кабинет пользователя:${N}"
+    echo "  Адрес:      ${G}$PORTAL_USER_URL${N}"
+    echo "  Логин:      ${B}$NAME${N}"
+    echo "  Пароль:     ${Y}$PORTAL_USER_PASS${N}"
+    echo
+    echo "${B}Подписка Sing-box (DoH 1.1.1.1 + обход РФ сайтов):${N}"
+    echo "  $PORTAL_SINGBOX_SUB"
+    echo
+  fi
   if [[ $TRUSTED == yes ]]; then
     echo "Подписка для ${B}$NAME${N} – все протоколы одной ссылкой. Вставьте её в Hiddify, v2rayN, Happ,"
     echo "Clash Verge или FlClash: приложение само получит подходящий формат."
@@ -1025,6 +1048,7 @@ install_kit_cli() {
     printf 'SUB_INTERNAL=%q\n' "${SUB_INTERNAL:-$SUB_PORT}"
     printf 'SINGLE=%q\n' "$SINGLE"
     printf 'MTPROTO_INNER=%q\n' "${INNER[mtproto]}"
+    printf 'PORTAL_DOMAIN=%q\n' "${DOMAIN:-$HOST}"
   } >/etc/kit/kit.env
   chmod 600 /etc/kit/kit.env
   install_kit_file
@@ -1039,7 +1063,7 @@ install_kit_file() {
   bash -n /usr/local/bin/kit || die "Команда kit скачалась повреждённой"
 }
 
-KIT_INSTALL_CMD="bash <(curl -fsSL https://raw.githubusercontent.com/itsnotkubrick/3X-UI_KIT/main/scripts/3x-ui.sh)"
+KIT_INSTALL_CMD="bash <(curl -fsSL https://raw.githubusercontent.com/Qislord/3X-UI_KIT_SING_BOX/main/scripts/3x-ui.sh)"
 
 # После «x-ui → Uninstall» меню подсказывает команду официального установщика –
 # меняем её на нашу. Только в echo: вызов установщика в «Update» не трогаем.
@@ -1210,9 +1234,22 @@ $locs
         proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
+    location /sub/singbox {
+        proxy_pass http://127.0.0.1:${INNER[portal]};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto https;
+    }
     location / {
-        root /var/www/kit;
-        index index.html;
+        proxy_pass http://127.0.0.1:${INNER[portal]};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto https;
     }
 }
 NGX
@@ -1220,7 +1257,7 @@ NGX
     cat >>/etc/nginx/conf.d/kit.conf <<NGX
 
 # Свой домен (self-steal): сюда REALITY отправляет всех, кто не подключается как клиент.
-# Только заглушка, без панели и подписки; порт слушает localhost.
+# Здесь работает личный кабинет пользователя kit-portal.
 server {
     listen 127.0.0.1:${INNER[selfweb]} ssl http2;
     server_name $steal_domain;
@@ -1230,8 +1267,14 @@ server {
     server_tokens off;
     access_log off;
     location / {
-        root /var/www/kit;
-        index index.html;
+        proxy_pass http://127.0.0.1:${INNER[portal]};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
     }
 }
 NGX
@@ -1370,6 +1413,82 @@ install_kit_sub() {
   for i in $(seq 1 20); do port_busy "$kp" tcp && return 0; sleep 1; done
   journalctl -u kit-sub -n 20 --no-pager >&2 || true
   die "kit-sub не запустился – лог выше."
+}
+
+KIT_PORTAL_URL="$KIT_RAW/scripts/kit-portal.py"
+KIT_PORTAL_STATIC_RAW="$KIT_RAW/portal"
+
+install_kit_portal_files() {
+  install -d -m 755 /usr/local/lib/kit-portal /usr/local/lib/kit-portal/portal /etc/kit
+  local src=${KIT_PORTAL_SRC:-}
+  if [[ -z $src ]]; then
+    local d; d=$(dirname "${BASH_SOURCE[0]}")
+    [[ -f $d/kit-portal.py && ${BASH_SOURCE[0]} != /dev/fd/* ]] && src=$d/kit-portal.py
+  fi
+  if [[ -n $src ]]; then
+    install -m 755 "$src" /usr/local/lib/kit-portal/kit_portal.py
+    local pd; pd="$(dirname "$src")/../portal"
+    if [[ -d $pd ]]; then
+      cp -rf "$pd"/* /usr/local/lib/kit-portal/portal/ 2>/dev/null || true
+    fi
+  else
+    curl -fsSL --retry 3 -o /usr/local/lib/kit-portal/kit_portal.py "$KIT_PORTAL_URL"
+    local f
+    for f in index.html style.css app.js qr.js; do
+      curl -fsSL --retry 3 -o "/usr/local/lib/kit-portal/portal/$f" "$KIT_PORTAL_STATIC_RAW/$f"
+    done
+  fi
+  python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" /usr/local/lib/kit-portal/kit_portal.py || die "kit-portal скачался повреждённым"
+}
+
+install_kit_portal() {
+  say "Ставлю личный кабинет пользователя (kit-portal)"
+  install_kit_portal_files
+  local d; d=$(dirname "${BASH_SOURCE[0]}")
+  if [[ -f $d/kit-portal.service && ${BASH_SOURCE[0]} != /dev/fd/* ]]; then
+    install -m 644 "$d/kit-portal.service" /etc/systemd/system/kit-portal.service
+  else
+    cat >/etc/systemd/system/kit-portal.service <<UNIT
+[Unit]
+Description=kit-portal: пользовательский портал и Sing-box подписка (3X-UI KIT)
+After=network-online.target x-ui.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/kit-portal/kit_portal.py serve
+Restart=on-failure
+RestartSec=5
+User=root
+WorkingDirectory=/usr/local/lib/kit-portal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=true
+ReadWritePaths=/etc/kit
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+  fi
+  systemctl daemon-reload
+  systemctl enable kit-portal >/dev/null 2>&1
+  systemctl restart kit-portal
+
+  # Регистрируем первого пользователя в портале
+  if [[ -n ${NAME:-} && -n ${SUBID:-} ]]; then
+    local p_out
+    p_out=$(python3 /usr/local/lib/kit-portal/kit_portal.py user add "$NAME" --sub-id "$SUBID" 2>/dev/null || true)
+    if [[ -n $p_out ]] && jq -e '.username' <<<"$p_out" >/dev/null 2>&1; then
+      PORTAL_USER_PASS=$(jq -r '.password // empty' <<<"$p_out")
+      PORTAL_USER_URL=$(jq -r '.portal_url // empty' <<<"$p_out")
+      PORTAL_SINGBOX_SUB=$(jq -r '.singbox_sub_url // empty' <<<"$p_out")
+    fi
+  fi
 }
 
 # Ссылки пользователя – из его же подписки (её собирает сама 3X-UI).

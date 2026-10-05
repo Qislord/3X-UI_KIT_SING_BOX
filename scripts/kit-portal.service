@@ -1,0 +1,24 @@
+[Unit]
+Description=kit-portal: пользовательский портал и Sing-box подписка (3X-UI KIT)
+After=network-online.target x-ui.service nginx.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /usr/local/lib/kit-portal/kit_portal.py serve
+Restart=on-failure
+RestartSec=5
+User=root
+WorkingDirectory=/usr/local/lib/kit-portal
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=true
+ReadWritePaths=/etc/kit
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+MemoryMax=128M
+
+[Install]
+WantedBy=multi-user.target
