@@ -1021,8 +1021,8 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             except Exception as e:
                 return self.send_json(500, {"error": f"Ошибка генерации конфига: {e}"})
 
-        # 2. API Текущий пользователь: /api/me
-        if path == "/api/me":
+        # 2. API Текущий пользователь: /api/me и /api/portal/info
+        if path in ("/api/me", "/api/portal/info"):
             user = self.get_auth_user()
             if not user:
                 return self.send_json(401, {"error": "Требуется авторизация"})

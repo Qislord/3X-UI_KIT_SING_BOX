@@ -160,7 +160,12 @@
   // --- Проверка авторизации ---
   async function checkAuth() {
     try {
-      const res = await apiRequest('/api/portal/info');
+      let res;
+      try {
+        res = await apiRequest('/api/me');
+      } catch (e1) {
+        res = await apiRequest('/api/portal/info');
+      }
       if (res && res.success && res.user) {
         currentUserData = res;
         renderDashboard(res);
@@ -168,6 +173,7 @@
         renderLogin();
       }
     } catch (err) {
+      console.warn('checkAuth failed:', err);
       renderLogin();
     }
   }
@@ -184,13 +190,15 @@
   }
 
   function renderDashboard(data) {
+    if (!data) return;
     loginView.hidden = true;
     dashboardView.hidden = false;
     headerAuth.hidden = false;
 
-    const user = data.user || {};
-    const stats = data.stats || {};
-    const domain = data.domain || window.location.host;
+    try {
+      const user = data.user || {};
+      const stats = data.stats || {};
+      const domain = data.domain || window.location.host;
 
     // Имя бренда и пользователя
     headerUsername.textContent = user.username || 'Пользователь';
@@ -265,7 +273,10 @@
 
     // 5. Рендеринг списка индивидуальных протоколов
     renderProxiesList(data.proxies || []);
+  } catch (err) {
+    console.error('Error in renderDashboard:', err);
   }
+}
 
   // Рендеринг списка карточек для отдельных протоколов
   function renderProxiesList(proxies) {
@@ -273,7 +284,9 @@
     proxiesListGrid.innerHTML = '';
 
     // Фильтруем MTProto из отображения
-    const cleanProxies = (proxies || []).filter((p) => p.type !== 'TG' && !p.link.startsWith('tg://'));
+    const cleanProxies = (proxies || []).filter(
+      (p) => p && p.type !== 'TG' && (!p.link || !String(p.link).startsWith('tg://'))
+    );
 
     if (cleanProxies.length === 0) {
       proxiesListGrid.innerHTML = '<div class="loading-box">Протоколы пока не загружены.</div>';
