@@ -420,8 +420,23 @@ def get_3xui_client_info(username: str) -> dict:
 
 
 # --- Парсер ссылок подписки и генератор Sing-Box ---
-def fetch_raw_subscription(sub_id: str) -> str:
-    """Загружает исходную подписку из локального бекенда 3X-UI."""
+def fix_tg_link(link: str) -> str:
+    """Заменяет внутренний порт 10445 на публичный порт 443 для MTProto прокси Telegram."""
+    if not link or not link.startswith("tg://"):
+        return link
+    # Заменяем внутренний порт 10445 на внешний 443 (в режиме единого порта через Nginx)
+    link = re.sub(r'([?&]port=)10445\b', r'\g<1>443', link)
+    # Если указан server=127.0.0.1 или localhost, подставляем актуальный домен или хост
+    host = DOMAIN or ENV.get("HOST", "")
+    if host and host not in ("127.0.0.1", "localhost"):
+        link = re.sub(r'([?&]server=)(?:127\.0\.0\.1|localhost)\b', rf'\g<1>{host}', link)
+    return link
+
+
+def fetch_single_sub(sub_id: str) -> str:
+    """Загружает одну подписку из локального бекенда 3X-UI."""
+    if not sub_id:
+        return ""
     sub_internal = ENV.get("SUB_INTERNAL", "2097")
     sub_path = "/" + ENV.get("SUB_PATH", "sub").strip("/") + "/"
     host = ENV.get("PORTAL_DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", "127.0.0.1")
@@ -452,6 +467,36 @@ def fetch_raw_subscription(sub_id: str) -> str:
         except Exception:
             continue
     return ""
+
+
+def fetch_raw_subscription(sub_id: str) -> str:
+    """Загружает исходную подписку, а также подписки -tg и -awg (как в 3x-ui.sh)."""
+    parts = []
+    main_sub = fetch_single_sub(sub_id)
+    if main_sub:
+        parts.append(main_sub)
+
+    # В 3x-ui.sh MTProto и AmneziaWG могут находиться в подписках с суффиксами -tg и -awg
+    if not sub_id.endswith("-tg") and not sub_id.endswith("-awg"):
+        extra_tg = fetch_single_sub(f"{sub_id}-tg")
+        if extra_tg and extra_tg not in parts:
+            parts.append(extra_tg)
+        extra_awg = fetch_single_sub(f"{sub_id}-awg")
+        if extra_awg and extra_awg not in parts:
+            parts.append(extra_awg)
+
+    full_text = "\n".join(parts)
+
+    # Исправляем ссылки MTProto для Telegram
+    fixed_lines = []
+    for line in full_text.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        if line.startswith("tg://"):
+            line = fix_tg_link(line)
+        fixed_lines.append(line)
+    return "\n".join(fixed_lines)
 
 
 def parse_query_params(qs: str) -> dict:
@@ -995,12 +1040,21 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
 
             # Формируем список индивидуальных ссылок
             raw_lines = [line.strip() for line in raw_sub.splitlines() if line.strip()]
+            clean_lines = []
             tg_link = ""
             parsed_proxies = []
             for line in raw_lines:
                 if line.startswith("tg://"):
+                    line = fix_tg_link(line)
                     tg_link = line
+                    clean_lines.append(line)
+                    parsed_proxies.append({
+                        "tag": "Telegram MTProto Proxy",
+                        "type": "TG",
+                        "link": line
+                    })
                     continue
+                clean_lines.append(line)
                 p = parse_proxy_link(line)
                 if p:
                     parsed_proxies.append({
@@ -1016,6 +1070,7 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                         "type": scheme,
                         "link": line
                     })
+            raw_lines = clean_lines
 
             return self.send_json(200, {
                 "success": True,

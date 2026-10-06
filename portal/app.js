@@ -325,6 +325,15 @@
         openQrModal(p.link, `QR-код: ${p.tag}`, `Отсканируйте камерой в приложении (V2Box, Happ, v2rayNG):`);
       });
 
+      // Для Telegram добавляем прямую кнопку подключения
+      if (p.type === 'TG') {
+        const connectBtn = document.createElement('a');
+        connectBtn.href = p.link;
+        connectBtn.className = 'btn btn-sm btn-primary';
+        connectBtn.innerHTML = '<span>⚡</span> Подключить';
+        actionsDiv.appendChild(connectBtn);
+      }
+
       actionsDiv.appendChild(copyBtn);
       actionsDiv.appendChild(qrBtn);
 
