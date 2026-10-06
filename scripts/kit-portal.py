@@ -1045,14 +1045,7 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             parsed_proxies = []
             for line in raw_lines:
                 if line.startswith("tg://"):
-                    line = fix_tg_link(line)
-                    tg_link = line
-                    clean_lines.append(line)
-                    parsed_proxies.append({
-                        "tag": "Telegram MTProto Proxy",
-                        "type": "TG",
-                        "link": line
-                    })
+                    # Исключаем неработающий MTProto из интерфейса пользователя
                     continue
                 clean_lines.append(line)
                 p = parse_proxy_link(line)
@@ -1071,11 +1064,6 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                         "link": line
                     })
             raw_lines = clean_lines
-
-            tg_ip_link = ""
-            host_ip = ENV.get("HOST", "")
-            if tg_link and host_ip and host_ip not in ("127.0.0.1", "localhost"):
-                tg_ip_link = re.sub(r'([?&]server=)[^&]+', rf'\g<1>{host_ip}', tg_link)
 
             return self.send_json(200, {
                 "success": True,

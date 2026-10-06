@@ -1,5 +1,5 @@
 /**
- * Личный кабинет skip-flash (User Portal) – Vanilla JavaScript SPA
+ * Личный кабинет skip-flash (User Portal) – Классический чистый JS SPA
  * https://github.com/itsnotkubrick/3X-UI_KIT
  */
 
@@ -39,7 +39,7 @@
   const toggleRawTextBtn = document.getElementById('toggleRawTextBtn');
   const proxiesListGrid = document.getElementById('proxiesListGrid');
 
-  // Кнопки копирования и действий
+  // Кнопки действий
   const copyUniversalSubBtn = document.getElementById('copyUniversalSubBtn');
   const qrUniversalBtn = document.getElementById('qrUniversalBtn');
   const copySingboxSubBtn = document.getElementById('copySingboxSubBtn');
@@ -47,13 +47,6 @@
   const copyJsonBtn = document.getElementById('copyJsonBtn');
   const rotateTokenBtn = document.getElementById('rotateTokenBtn');
   const copyAllRawBtn = document.getElementById('copyAllRawBtn');
-
-  // Telegram баннер и кнопки
-  const tgProxyBanner = document.getElementById('tgProxyBanner');
-  const openTgProxyBtn = document.getElementById('openTgProxyBtn');
-  const openTgProxyIpBtn = document.getElementById('openTgProxyIpBtn');
-  const copyTgProxyBtn = document.getElementById('copyTgProxyBtn');
-  const guideTgProxyBtn = document.getElementById('guideTgProxyBtn');
 
   // Модалка QR-кода
   const qrModal = document.getElementById('qrModal');
@@ -158,45 +151,52 @@
       data = { error: 'Некорректный ответ сервера' };
     }
     if (!resp.ok) {
-      throw new Error(data.error || `Ошибка (${resp.status})`);
+      const msg = data.message || data.error || `Ошибка сервера (${resp.status})`;
+      throw new Error(msg);
     }
     return data;
   }
 
-  // --- Загрузка и рендеринг кабинета ---
+  // --- Проверка авторизации ---
   async function checkAuth() {
     try {
-      const data = await apiRequest('/api/me');
-      if (data && data.success) {
-        currentUserData = data;
-        renderDashboard(data);
+      const res = await apiRequest('/api/portal/info');
+      if (res && res.success && res.user) {
+        currentUserData = res;
+        renderDashboard(res);
       } else {
         renderLogin();
       }
-    } catch (e) {
+    } catch (err) {
       renderLogin();
     }
   }
 
   function renderLogin() {
+    currentUserData = null;
     loginView.hidden = false;
     dashboardView.hidden = true;
     headerAuth.hidden = true;
-    closeQrModal();
+    usernameInput.value = '';
+    passwordInput.value = '';
+    loginAlert.hidden = true;
+    setTimeout(() => usernameInput.focus(), 50);
   }
 
   function renderDashboard(data) {
     loginView.hidden = true;
     dashboardView.hidden = false;
     headerAuth.hidden = false;
-    closeQrModal();
 
     const user = data.user || {};
     const stats = data.stats || {};
-    const domain = data.domain || window.location.hostname;
+    const domain = data.domain || window.location.host;
 
-    headerUsername.textContent = user.username || 'Клиент';
-    if (portalBrandTitle) portalBrandTitle.textContent = domain;
+    // Имя бренда и пользователя
+    headerUsername.textContent = user.username || 'Пользователь';
+    if (portalBrandTitle) {
+      portalBrandTitle.textContent = domain ? `${domain}` : 'VPN Шлюз';
+    }
 
     // 1. Ссылки на подписки
     const universalUrl = data.universal_sub_url || `https://${domain}/sub/${user.sub_id}`;
@@ -207,26 +207,7 @@
     singboxSubUrlInput.value = singboxUrl;
     rawAllTextarea.value = rawSub;
 
-    // 2. Telegram прокси
-    const tgUrl = data.tg_proxy_url || '';
-    const tgIpUrl = data.tg_proxy_ip_url || '';
-    if (tgUrl) {
-      tgProxyBanner.hidden = false;
-      openTgProxyBtn.href = tgUrl;
-      if (openTgProxyIpBtn) {
-        if (tgIpUrl && tgIpUrl !== tgUrl) {
-          openTgProxyIpBtn.hidden = false;
-          openTgProxyIpBtn.href = tgIpUrl;
-        } else {
-          openTgProxyIpBtn.hidden = true;
-        }
-      }
-      if (guideTgProxyBtn) guideTgProxyBtn.href = tgUrl;
-    } else {
-      tgProxyBanner.hidden = true;
-    }
-
-    // 3. Статус аккаунта
+    // 2. Статус аккаунта
     const isEnable = stats.enable !== undefined ? stats.enable : true;
     if (isEnable) {
       accountStatusText.textContent = 'Активен';
@@ -238,7 +219,7 @@
       accountUserComment.textContent = 'Доступ временно приостановлен';
     }
 
-    // 4. Расход трафика
+    // 3. Расход трафика
     const usedBytes = stats.used || 0;
     const totalGB = stats.totalGB || 0;
     const totalBytes = totalGB * 1073741824;
@@ -263,7 +244,7 @@
       trafficPercentText.textContent = 'Безлимитный тариф';
     }
 
-    // 5. Срок действия
+    // 4. Срок действия
     const expMs = stats.expiryTime || 0;
     if (expMs > 0) {
       const expDate = new Date(expMs);
@@ -282,7 +263,7 @@
       daysLeftText.textContent = 'Без ограничений по времени';
     }
 
-    // 6. Рендеринг списка индивидуальных протоколов
+    // 5. Рендеринг списка индивидуальных протоколов
     renderProxiesList(data.proxies || []);
   }
 
@@ -291,37 +272,40 @@
     if (!proxiesListGrid) return;
     proxiesListGrid.innerHTML = '';
 
-    if (!proxies || proxies.length === 0) {
-      proxiesListGrid.innerHTML = '<div class="loading-placeholder">Протоколы пока не загружены.</div>';
+    // Фильтруем MTProto из отображения
+    const cleanProxies = (proxies || []).filter((p) => p.type !== 'TG' && !p.link.startsWith('tg://'));
+
+    if (cleanProxies.length === 0) {
+      proxiesListGrid.innerHTML = '<div class="loading-box">Протоколы пока не загружены.</div>';
       return;
     }
 
-    proxies.forEach((p) => {
+    cleanProxies.forEach((p) => {
       const card = document.createElement('div');
-      card.className = 'proxy-row-card';
+      card.className = 'proxy-item-row';
 
       const infoDiv = document.createElement('div');
-      infoDiv.className = 'proxy-info';
+      infoDiv.className = 'proxy-item-info';
 
       const tagBadge = document.createElement('span');
-      tagBadge.className = 'proxy-type-tag';
+      tagBadge.className = 'proxy-type-badge';
       tagBadge.textContent = p.type || 'PROXY';
 
       const nameSpan = document.createElement('span');
-      nameSpan.className = 'proxy-name';
+      nameSpan.className = 'proxy-name-label';
       nameSpan.textContent = p.tag || 'Сервер';
 
       infoDiv.appendChild(tagBadge);
       infoDiv.appendChild(nameSpan);
 
       const actionsDiv = document.createElement('div');
-      actionsDiv.className = 'proxy-actions';
+      actionsDiv.className = 'proxy-item-actions';
 
       // Кнопка копирования
       const copyBtn = document.createElement('button');
       copyBtn.type = 'button';
       copyBtn.className = 'btn btn-sm btn-secondary';
-      copyBtn.innerHTML = '<span>📋</span> Копировать';
+      copyBtn.innerHTML = '📋 Копировать';
       copyBtn.addEventListener('click', () => {
         copyToClipboard(p.link, `Ссылка на ${p.tag} скопирована!`);
       });
@@ -330,19 +314,10 @@
       const qrBtn = document.createElement('button');
       qrBtn.type = 'button';
       qrBtn.className = 'btn btn-sm btn-secondary';
-      qrBtn.innerHTML = '<span>📱</span> QR';
+      qrBtn.innerHTML = '📱 QR';
       qrBtn.addEventListener('click', () => {
-        openQrModal(p.link, `QR-код: ${p.tag}`, `Отсканируйте камерой в приложении (V2Box, Happ, v2rayNG):`);
+        openQrModal(p.link, `QR-код: ${p.tag}`, 'Отсканируйте камерой в приложении (V2Box, Happ, v2rayNG):');
       });
-
-      // Для Telegram добавляем прямую кнопку подключения
-      if (p.type === 'TG') {
-        const connectBtn = document.createElement('a');
-        connectBtn.href = p.link;
-        connectBtn.className = 'btn btn-sm btn-primary';
-        connectBtn.innerHTML = '<span>⚡</span> Подключить';
-        actionsDiv.appendChild(connectBtn);
-      }
 
       actionsDiv.appendChild(copyBtn);
       actionsDiv.appendChild(qrBtn);
@@ -388,25 +363,21 @@
   });
 
   // Показ / скрытие пароля
-  togglePasswordBtn.addEventListener('click', () => {
-    if (passwordInput.type === 'password') {
-      passwordInput.type = 'text';
-      togglePasswordBtn.textContent = '🔒';
-    } else {
-      passwordInput.type = 'password';
-      togglePasswordBtn.textContent = '👁️';
-    }
-  });
+  if (togglePasswordBtn) {
+    togglePasswordBtn.addEventListener('click', () => {
+      const type = passwordInput.getAttribute('type') === 'password' ? 'text' : 'password';
+      passwordInput.setAttribute('type', type);
+      togglePasswordBtn.textContent = type === 'password' ? '👁️' : '🔒';
+    });
+  }
 
-  // Выход из системы (Logout)
+  // --- Выход из системы ---
   logoutBtn.addEventListener('click', async () => {
     try {
       await apiRequest('/api/logout', { method: 'POST' });
     } catch (e) {
-      // Игнорируем ошибку при логауте
+      // Игнорируем ошибку при выходе
     }
-    currentUserData = null;
-    passwordInput.value = '';
     showToast('Вы вышли из системы');
     renderLogin();
   });
@@ -459,34 +430,34 @@
     }
   });
 
-  // Быстрые кнопки копирования из инструкций
+  // Быстрые кнопки копирования из инструкций (Универсальная)
   document.querySelectorAll('.copy-quick-sub-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const url = universalSubUrlInput.value;
       if (url) {
-        copyToClipboard(url, '⚡ Ссылка скопирована в буфер обмена!');
+        copyToClipboard(url, '⚡ Универсальная ссылка скопирована в буфер обмена!');
       }
     });
   });
 
-  // Копирование Telegram прокси
-  if (copyTgProxyBtn) {
-    copyTgProxyBtn.addEventListener('click', () => {
-      const url = currentUserData ? currentUserData.tg_proxy_url : '';
+  // Быстрые кнопки копирования из инструкций (Sing-box)
+  document.querySelectorAll('.copy-quick-singbox-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const url = singboxSubUrlInput.value;
       if (url) {
-        copyToClipboard(url, '✈️ Ссылка на Telegram прокси скопирована!');
+        copyToClipboard(url, '🧠 Ссылка на Sing-box скопирована в буфер обмена!');
       }
     });
-  }
+  });
 
   // Переключение видимости текстового поля всех ключей
   toggleRawTextBtn.addEventListener('click', () => {
     if (rawTextareaWrap.hidden) {
       rawTextareaWrap.hidden = false;
-      toggleRawTextBtn.innerHTML = '<span>👁️</span> Скрыть текстовый вид';
+      toggleRawTextBtn.textContent = '👁️ Скрыть текст';
     } else {
       rawTextareaWrap.hidden = true;
-      toggleRawTextBtn.innerHTML = '<span>👁️</span> Показать текстовый вид';
+      toggleRawTextBtn.textContent = '👁️ Показать в тексте';
     }
   });
 
@@ -496,7 +467,7 @@
     if (!url) return;
     copyJsonBtn.disabled = true;
     const origHtml = copyJsonBtn.innerHTML;
-    copyJsonBtn.innerHTML = '<span>⏳</span> Загрузка...';
+    copyJsonBtn.innerHTML = 'Загрузка...';
 
     try {
       const res = await fetch(url);
