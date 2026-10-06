@@ -1072,6 +1072,11 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                     })
             raw_lines = clean_lines
 
+            tg_ip_link = ""
+            host_ip = ENV.get("HOST", "")
+            if tg_link and host_ip and host_ip not in ("127.0.0.1", "localhost"):
+                tg_ip_link = re.sub(r'([?&]server=)[^&]+', rf'\g<1>{host_ip}', tg_link)
+
             return self.send_json(200, {
                 "success": True,
                 "user": {
@@ -1087,6 +1092,7 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                 "sub_url": universal_sub_url,  # Основная универсальная ссылка по умолчанию
                 "raw_subscription": "\n".join(raw_lines),
                 "tg_proxy_url": tg_link,
+                "tg_proxy_ip_url": tg_ip_link or tg_link,
                 "proxies": parsed_proxies,
             })
 

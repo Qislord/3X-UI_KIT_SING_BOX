@@ -51,6 +51,7 @@
   // Telegram баннер и кнопки
   const tgProxyBanner = document.getElementById('tgProxyBanner');
   const openTgProxyBtn = document.getElementById('openTgProxyBtn');
+  const openTgProxyIpBtn = document.getElementById('openTgProxyIpBtn');
   const copyTgProxyBtn = document.getElementById('copyTgProxyBtn');
   const guideTgProxyBtn = document.getElementById('guideTgProxyBtn');
 
@@ -208,9 +209,18 @@
 
     // 2. Telegram прокси
     const tgUrl = data.tg_proxy_url || '';
+    const tgIpUrl = data.tg_proxy_ip_url || '';
     if (tgUrl) {
       tgProxyBanner.hidden = false;
       openTgProxyBtn.href = tgUrl;
+      if (openTgProxyIpBtn) {
+        if (tgIpUrl && tgIpUrl !== tgUrl) {
+          openTgProxyIpBtn.hidden = false;
+          openTgProxyIpBtn.href = tgIpUrl;
+        } else {
+          openTgProxyIpBtn.hidden = true;
+        }
+      }
       if (guideTgProxyBtn) guideTgProxyBtn.href = tgUrl;
     } else {
       tgProxyBanner.hidden = true;
