@@ -1023,66 +1023,68 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
 
         # 2. API Текущий пользователь: /api/me и /api/portal/info
         if path in ("/api/me", "/api/portal/info"):
-            user = self.get_auth_user()
-            if not user:
-                return self.send_json(401, {"error": "Требуется авторизация"})
-
-            stats = get_3xui_client_info(user["username"])
-            raw_sub = ""
             try:
-                raw_sub = fetch_raw_subscription(user["sub_id"])
-            except Exception:
-                pass
+                user = self.get_auth_user()
+                if not user:
+                    return self.send_json(401, {"error": "Требуется авторизация"})
 
-            sub_path = "/" + ENV.get("SUB_PATH", "sub").strip("/") + "/"
-            universal_sub_url = f"https://{DOMAIN}{sub_path}{user['sub_id']}"
-            singbox_sub_url = f"https://{DOMAIN}/sub/singbox?token={user['sub_token']}"
+                stats = get_3xui_client_info(user["username"])
+                raw_sub = ""
+                try:
+                    raw_sub = fetch_raw_subscription(user["sub_id"])
+                except Exception:
+                    pass
 
-            # Формируем список индивидуальных ссылок
-            raw_lines = [line.strip() for line in raw_sub.splitlines() if line.strip()]
-            clean_lines = []
-            tg_link = ""
-            parsed_proxies = []
-            for line in raw_lines:
-                if line.startswith("tg://"):
-                    # Исключаем неработающий MTProto из интерфейса пользователя
-                    continue
-                clean_lines.append(line)
-                p = parse_proxy_link(line)
-                if p:
-                    parsed_proxies.append({
-                        "tag": p.get("tag", "Прокси"),
-                        "type": p.get("type", "vless").upper(),
-                        "link": line
-                    })
-                elif "://" in line:
-                    scheme = line.split("://")[0].upper()
-                    frag = line.split("#")[1] if "#" in line else scheme
-                    parsed_proxies.append({
-                        "tag": urllib.parse.unquote(frag),
-                        "type": scheme,
-                        "link": line
-                    })
-            raw_lines = clean_lines
+                sub_path = "/" + ENV.get("SUB_PATH", "sub").strip("/") + "/"
+                universal_sub_url = f"https://{DOMAIN}{sub_path}{user['sub_id']}"
+                singbox_sub_url = f"https://{DOMAIN}/sub/singbox?token={user['sub_token']}"
 
-            return self.send_json(200, {
-                "success": True,
-                "user": {
-                    "username": user["username"],
-                    "sub_id": user["sub_id"],
-                    "sub_token": user["sub_token"],
-                    "created_at": user["created_at"],
-                },
-                "stats": stats,
-                "domain": DOMAIN,
-                "universal_sub_url": universal_sub_url,
-                "singbox_sub_url": singbox_sub_url,
-                "sub_url": universal_sub_url,  # Основная универсальная ссылка по умолчанию
-                "raw_subscription": "\n".join(raw_lines),
-                "tg_proxy_url": tg_link,
-                "tg_proxy_ip_url": tg_ip_link or tg_link,
-                "proxies": parsed_proxies,
-            })
+                # Формируем список индивидуальных ссылок
+                raw_lines = [line.strip() for line in raw_sub.splitlines() if line.strip()]
+                clean_lines = []
+                parsed_proxies = []
+                for line in raw_lines:
+                    if line.startswith("tg://"):
+                        # Исключаем неработающий MTProto из интерфейса пользователя
+                        continue
+                    clean_lines.append(line)
+                    p = parse_proxy_link(line)
+                    if p:
+                        parsed_proxies.append({
+                            "tag": p.get("tag", "Прокси"),
+                            "type": p.get("type", "vless").upper(),
+                            "link": line
+                        })
+                    elif "://" in line:
+                        scheme = line.split("://")[0].upper()
+                        frag = line.split("#")[1] if "#" in line else scheme
+                        parsed_proxies.append({
+                            "tag": urllib.parse.unquote(frag),
+                            "type": scheme,
+                            "link": line
+                        })
+                raw_lines = clean_lines
+
+                return self.send_json(200, {
+                    "success": True,
+                    "user": {
+                        "username": user["username"],
+                        "sub_id": user["sub_id"],
+                        "sub_token": user["sub_token"],
+                        "created_at": user["created_at"],
+                    },
+                    "stats": stats,
+                    "domain": DOMAIN,
+                    "universal_sub_url": universal_sub_url,
+                    "singbox_sub_url": singbox_sub_url,
+                    "sub_url": universal_sub_url,
+                    "raw_subscription": "\n".join(raw_lines),
+                    "proxies": parsed_proxies,
+                })
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                return self.send_json(500, {"error": f"Внутренняя ошибка сервера: {e}"})
 
         # 3. Статические файлы фронтенда
         static_abs = os.path.realpath(STATIC_DIR)
