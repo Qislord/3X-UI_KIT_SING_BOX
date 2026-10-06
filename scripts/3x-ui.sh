@@ -294,11 +294,19 @@ main() {
   set -- ${args[@]+"${args[@]}"}
   [[ $EUID -eq 0 ]] || die "Запустите от root: sudo -i, затем команду ещё раз."
   command -v systemctl >/dev/null || die "Нужен systemd."
+  local force=no
+  for a in "$@"; do
+    [[ $a == --force || $a == -f ]] && force=yes
+  done
   if [[ -f $RESULT && -x /usr/local/x-ui/x-ui ]]; then
-    die "3X-UI уже установлена этим скриптом. Управление: команда x-ui, данные для входа: cat $RESULT"
+    if [[ $force == yes ]]; then
+      say "Перенастройка поверх существующей установки (--force)"
+    else
+      die "3X-UI уже установлена этим скриптом. Чтобы обновить настройки или применить домен, запустите с флагом --force."
+    fi
   fi
   # Панель удалили через меню x-ui, а наши файлы остались – убираем их и ставим заново.
-  if [[ -f $RESULT ]]; then
+  if [[ -f $RESULT && ! -x /usr/local/x-ui/x-ui ]]; then
     warn "Панель 3X-UI удалена, но остались файлы прошлой установки – убираю их."
     systemctl disable --now kit-sub kit-portal kit-update.timer >/dev/null 2>&1 || true
     rm -rf /etc/systemd/system/kit-sub.service /etc/systemd/system/kit-portal.service /etc/systemd/system/kit-update.service /etc/systemd/system/kit-update.timer /usr/local/lib/kit-sub /usr/local/lib/kit-portal /etc/kit-sub /etc/kit /usr/local/bin/kit \
@@ -333,6 +341,7 @@ main() {
       --multi-port) multi=yes; shift ;;
       --key) ukey=$2; shift 2 ;;
       --no-ufw) UFW=no; shift ;;
+      --force|-f) force=yes; shift ;;
       -y|--yes) yes=yes; shift ;;
       -h|--help) usage; exit 0 ;;
       *) die "Неизвестный параметр: $1 (см. --help)" ;;
@@ -1594,6 +1603,7 @@ usage() {
   --user admin        имя первого клиента
   --host 1.2.3.4      адрес в ссылке, если IP определился неверно
   --no-ufw            не трогать файрвол
+  --force, -f         перенастроить поверх существующей установки (обновить маршруты, домен)
   -y                  не задавать вопросов
 EOF
 }
