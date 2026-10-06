@@ -16,6 +16,14 @@ jobs:
         run: shellcheck -S warning -e SC1090,SC2034,SC2211 scripts/*.sh tools/release.sh
       - name: Python
         run: python3 -m py_compile scripts/kit-sub.py
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22'
+      - name: Go Test
+        run: go test -v ./...
+      - name: Go Build
+        run: ./tools/build.sh
       - name: Генераторы
         run: node --test tools/test/*.test.js
       - name: Версия в скриптах совпадает с VERSION

@@ -54,6 +54,10 @@ api() { # METHOD path [json]
 }
 
 portal_py() {
+  if [[ -x /usr/local/bin/kit-portal ]]; then
+    /usr/local/bin/kit-portal "$@"
+    return
+  fi
   local p="/usr/local/lib/kit-portal/kit_portal.py"
   [[ -f $p ]] || p="$(dirname "${BASH_SOURCE[0]}")/kit-portal.py"
   if [[ -f $p ]]; then

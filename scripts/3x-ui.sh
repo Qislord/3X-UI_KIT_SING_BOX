@@ -1284,8 +1284,13 @@ server {
     absolute_redirect off;
     access_log off;
 $locs
+    local sub_target="${INNER[sub]}"
+    if [[ -x /usr/local/bin/kit-portal ]]; then
+      sub_target="${INNER[portal]}"
+    fi
+
     location $SUB_PATH {
-        proxy_pass http://127.0.0.1:${INNER[sub]};
+        proxy_pass http://127.0.0.1:$sub_target;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$proxy_protocol_addr;
@@ -1342,7 +1347,7 @@ server {
     access_log off;
 $self_locs
     location $SUB_PATH {
-        proxy_pass http://127.0.0.1:${INNER[sub]};
+        proxy_pass http://127.0.0.1:$sub_target;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
@@ -1524,8 +1529,24 @@ KIT_PORTAL_STATIC_RAW="$KIT_RAW/portal"
 install_kit_portal_files() {
   install -d -m 755 /usr/local/lib/kit-portal /usr/local/lib/kit-portal/portal /etc/kit
   local src=${KIT_PORTAL_SRC:-}
+  local d; d=$(dirname "${BASH_SOURCE[0]}")
+  local arch; arch=$(uname -m 2>/dev/null || echo "")
+  case "$arch" in
+    x86_64|amd64) arch="amd64" ;;
+    aarch64|arm64) arch="arm64" ;;
+    *) arch="" ;;
+  esac
+
+  if [[ -n $arch && -f "$d/../dist/kit-portal-linux-$arch" ]]; then
+    install -m 755 "$d/../dist/kit-portal-linux-$arch" /usr/local/bin/kit-portal
+  elif [[ -f "$d/kit-portal" ]]; then
+    install -m 755 "$d/kit-portal" /usr/local/bin/kit-portal
+  elif [[ -n $arch ]]; then
+    say "Скачиваю бинарник личного кабинета kit-portal ($arch)"
+    curl -fsSL --retry 3 -o /usr/local/bin/kit-portal "$KIT_RAW/dist/kit-portal-linux-$arch" 2>/dev/null && chmod +x /usr/local/bin/kit-portal || true
+  fi
+
   if [[ -z $src ]]; then
-    local d; d=$(dirname "${BASH_SOURCE[0]}")
     [[ -f $d/kit-portal.py && ${BASH_SOURCE[0]} != /dev/fd/* ]] && src=$d/kit-portal.py
   fi
   if [[ -n $src ]]; then
@@ -1541,14 +1562,24 @@ install_kit_portal_files() {
       curl -fsSL --retry 3 -o "/usr/local/lib/kit-portal/portal/$f" "$KIT_PORTAL_STATIC_RAW/$f"
     done
   fi
-  python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" /usr/local/lib/kit-portal/kit_portal.py || die "kit-portal скачался повреждённым"
+  if [[ ! -x /usr/local/bin/kit-portal ]]; then
+    python3 -c "import ast,sys; ast.parse(open(sys.argv[1]).read())" /usr/local/lib/kit-portal/kit_portal.py || die "kit-portal скачался повреждённым"
+  fi
 }
 
 install_kit_portal() {
   say "Ставлю личный кабинет пользователя (kit-portal)"
   install_kit_portal_files
   local d; d=$(dirname "${BASH_SOURCE[0]}")
-  if [[ -f $d/kit-portal.service && ${BASH_SOURCE[0]} != /dev/fd/* ]]; then
+
+  local exec_cmd="/usr/bin/python3 /usr/local/lib/kit-portal/kit_portal.py serve"
+  local mem_max="64M"
+  if [[ -x /usr/local/bin/kit-portal ]]; then
+    exec_cmd="/usr/local/bin/kit-portal serve"
+    mem_max="32M"
+  fi
+
+  if [[ -f $d/kit-portal.service && ${BASH_SOURCE[0]} != /dev/fd/* && -x /usr/local/bin/kit-portal ]]; then
     install -m 644 "$d/kit-portal.service" /etc/systemd/system/kit-portal.service
   else
     cat >/etc/systemd/system/kit-portal.service <<UNIT
@@ -1561,7 +1592,7 @@ Wants=network-online.target
 Type=simple
 Environment=PORTAL_PORT=10465
 EnvironmentFile=-/etc/kit/kit.env
-ExecStart=/usr/bin/python3 /usr/local/lib/kit-portal/kit_portal.py serve
+ExecStart=$exec_cmd
 Restart=on-failure
 RestartSec=5
 User=root
@@ -1574,7 +1605,7 @@ ReadWritePaths=/etc/kit
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-MemoryMax=128M
+MemoryMax=$mem_max
 
 [Install]
 WantedBy=multi-user.target
@@ -1584,10 +1615,19 @@ UNIT
   systemctl enable kit-portal >/dev/null 2>&1
   systemctl restart kit-portal
 
+  # Если активен Go-демон kit-portal, отключаем дублирующий kit-sub (его функции внутри kit-portal)
+  if [[ -x /usr/local/bin/kit-portal ]]; then
+    systemctl disable --now kit-sub >/dev/null 2>&1 || true
+  fi
+
   # Регистрируем первого пользователя в портале
   if [[ -n ${NAME:-} && -n ${SUBID:-} ]]; then
     local p_out
-    p_out=$(python3 /usr/local/lib/kit-portal/kit_portal.py user add "$NAME" --sub-id "$SUBID" 2>/dev/null || true)
+    if [[ -x /usr/local/bin/kit-portal ]]; then
+      p_out=$(/usr/local/bin/kit-portal user add "$NAME" --sub-id "$SUBID" 2>/dev/null || true)
+    else
+      p_out=$(python3 /usr/local/lib/kit-portal/kit_portal.py user add "$NAME" --sub-id "$SUBID" 2>/dev/null || true)
+    fi
     if [[ -n $p_out ]] && jq -e '.username' <<<"$p_out" >/dev/null 2>&1; then
       PORTAL_USER_PASS=$(jq -r '.password // empty' <<<"$p_out")
       PORTAL_USER_URL=$(jq -r '.portal_url // empty' <<<"$p_out")
