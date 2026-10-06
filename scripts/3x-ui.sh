@@ -508,6 +508,7 @@ main() {
 
   # --- подписка: ссылки, Clash/Mihomo и JSON с автоопределением клиента ---
   setup_subscription
+  write_kit_env
   install_kit_portal
   [[ $SINGLE == yes ]] && setup_nginx
   install_kit_cli
@@ -524,11 +525,12 @@ main() {
 
   # --- итог ---
   local panel_url links
+  local panel_host=${DOMAIN:-$HOST}
   if [[ $SINGLE == yes ]]; then
-    panel_url="https://$HOST/${XUI_WEB_BASE_PATH#/}"
+    panel_url="https://$panel_host/${XUI_WEB_BASE_PATH#/}"
     panel_url="${panel_url%/}/"
   elif [[ $TRUSTED == yes ]]; then
-    panel_url="https://$HOST:$XUI_PANEL_PORT/$XUI_WEB_BASE_PATH"
+    panel_url="https://$panel_host:$XUI_PANEL_PORT/$XUI_WEB_BASE_PATH"
   else
     panel_url="http://127.0.0.1:$XUI_PANEL_PORT/$XUI_WEB_BASE_PATH  (через SSH-туннель: ssh -L $XUI_PANEL_PORT:127.0.0.1:$XUI_PANEL_PORT root@$HOST)"
   fi
@@ -1039,18 +1041,24 @@ awg_attach() { # имя subId [лимит-байт] [срок-мс] [устро�
 
 KIT_CLI_URL="$KIT_RAW/scripts/kit.sh"
 
-install_kit_cli() {
+write_kit_env() {
   install -d -m 700 /etc/kit
   {
     printf 'HOST=%q\n' "$HOST"
+    printf 'DOMAIN=%q\n' "${DOMAIN:-}"
     printf 'SUB_BASE=%q\n' "${SUB_URL%$SUBID}"
     printf 'SUB_PATH=%q\n' "$SUB_PATH"
     printf 'SUB_INTERNAL=%q\n' "${SUB_INTERNAL:-$SUB_PORT}"
     printf 'SINGLE=%q\n' "$SINGLE"
     printf 'MTPROTO_INNER=%q\n' "${INNER[mtproto]}"
     printf 'PORTAL_DOMAIN=%q\n' "${DOMAIN:-$HOST}"
+    printf 'PORTAL_PORT=%q\n' "${INNER[portal]}"
   } >/etc/kit/kit.env
   chmod 600 /etc/kit/kit.env
+}
+
+install_kit_cli() {
+  write_kit_env
   install_kit_file
 }
 
@@ -1134,7 +1142,7 @@ setup_nginx() {
   [[ -f /var/www/kit/index.html ]] || stub_site >/var/www/kit/index.html
 
   # Маршруты – из текущих подключений панели: сайты REALITY, пути WebSocket, сервисы gRPC.
-  local list reality_sni xhttp_sni mt_sni steal_domain locs="" kind path port
+  local list reality_sni xhttp_sni mt_sni steal_domain locs="" self_locs="" kind path port
   list=$(api GET inbounds/list)
   # Свой домен: REALITY отдаёт чужим гостям сайт с этого же сервера (nginx на внутреннем порту).
   steal_domain=$(jq -r --arg t "127.0.0.1:${INNER[selfweb]}" '.[] | select(.remark == "REALITY" and .listen == "127.0.0.1")
@@ -1167,11 +1175,30 @@ setup_nginx() {
         proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
         proxy_read_timeout 1h;
     }"
+      self_locs+="
+    location = $path {
+        proxy_pass http://127.0.0.1:$port;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection \"upgrade\";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_read_timeout 1h;
+    }"
     else
       locs+="
     location /$path/ {
         grpc_pass grpc://127.0.0.1:$port;
         grpc_set_header X-Real-IP \$proxy_protocol_addr;
+        grpc_read_timeout 1h;
+        grpc_send_timeout 1h;
+        client_max_body_size 0;
+    }"
+      self_locs+="
+    location /$path/ {
+        grpc_pass grpc://127.0.0.1:$port;
+        grpc_set_header X-Real-IP \$remote_addr;
         grpc_read_timeout 1h;
         grpc_send_timeout 1h;
         client_max_body_size 0;
@@ -1215,13 +1242,19 @@ server {
     set_real_ip_from 127.0.0.1;
     real_ip_header proxy_protocol;
     server_tokens off;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
     # Иначе редирект «добавить слеш» уйдёт на внутренний порт nginx.
     absolute_redirect off;
     access_log off;
 $locs
     location $SUB_PATH {
         proxy_pass http://127.0.0.1:${INNER[sub]};
+        proxy_http_version 1.1;
         proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-Proto https;
     }
     location $panel_path {
         proxy_pass https://127.0.0.1:$XUI_PANEL_PORT;
@@ -1236,6 +1269,7 @@ $locs
     }
     location /sub/singbox {
         proxy_pass http://127.0.0.1:${INNER[portal]};
+        proxy_http_version 1.1;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$proxy_protocol_addr;
         proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
@@ -1257,7 +1291,7 @@ NGX
     cat >>/etc/nginx/conf.d/kit.conf <<NGX
 
 # Свой домен (self-steal): сюда REALITY отправляет всех, кто не подключается как клиент.
-# Здесь работает личный кабинет пользователя kit-portal.
+# Здесь работают личный кабинет пользователя kit-portal, подписка и панель 3X-UI.
 server {
     listen 127.0.0.1:${INNER[selfweb]} ssl http2;
     server_name $steal_domain;
@@ -1265,7 +1299,39 @@ server {
     ssl_certificate_key $DOMAIN_CERT_DIR/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
     server_tokens off;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    # Иначе редирект «добавить слеш» уйдёт на внутренний порт nginx.
+    absolute_redirect off;
     access_log off;
+$self_locs
+    location $SUB_PATH {
+        proxy_pass http://127.0.0.1:${INNER[sub]};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+    location $panel_path {
+        proxy_pass https://127.0.0.1:$XUI_PANEL_PORT;
+        proxy_ssl_verify off;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
+    location /sub/singbox {
+        proxy_pass http://127.0.0.1:${INNER[portal]};
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto https;
+    }
     location / {
         proxy_pass http://127.0.0.1:${INNER[portal]};
         proxy_http_version 1.1;
@@ -1308,8 +1374,9 @@ setup_subscription() {
     # Наружу смотрит kit-sub (подписка с учётом приложения), 3X-UI – только на 127.0.0.1.
     SUB_PORT=2096; SUB_INTERNAL=2097
     # Без subURI панель показывает ссылку на внутренний порт 2097, до которого снаружи не достучаться.
-    local uri="https://$HOST:$SUB_PORT$SUB_PATH"
-    [[ $SINGLE == yes ]] && uri="https://$HOST$SUB_PATH"
+    local host_sub=${DOMAIN:-$HOST}
+    local uri="https://$host_sub:$SUB_PORT$SUB_PATH"
+    [[ $SINGLE == yes ]] && uri="https://$host_sub$SUB_PATH"
     upd=$(jq -c --arg path "$SUB_PATH" --argjson ip "$SUB_INTERNAL" --arg title "3X-UI KIT" --arg uri "$uri" '
       .subEnable = true | .subPath = $path | .subTitle = $title | .subListen = "127.0.0.1" | .subPort = $ip
       | .subURI = $uri
@@ -1327,9 +1394,9 @@ setup_subscription() {
     wait_panel
   fi
   [[ $TRUSTED == yes ]] && install_kit_sub
-  if [[ $SINGLE == yes ]]; then SUB_URL="https://$HOST$SUB_PATH$SUBID"
-  elif [[ $TRUSTED == yes ]]; then SUB_URL="https://$HOST:$SUB_PORT$SUB_PATH$SUBID"; else SUB_URL="http://127.0.0.1:$SUB_PORT$SUB_PATH$SUBID"; fi
-  SUB_FETCH="$(if [[ $TRUSTED == yes ]]; then echo https; else echo http; fi)://$HOST:$SUB_PORT$SUB_PATH$SUBID"
+  if [[ $SINGLE == yes ]]; then SUB_URL="https://${DOMAIN:-$HOST}$SUB_PATH$SUBID"
+  elif [[ $TRUSTED == yes ]]; then SUB_URL="https://${DOMAIN:-$HOST}:$SUB_PORT$SUB_PATH$SUBID"; else SUB_URL="http://127.0.0.1:$SUB_PORT$SUB_PATH$SUBID"; fi
+  SUB_FETCH="$(if [[ $TRUSTED == yes ]]; then echo https; else echo http; fi)://${DOMAIN:-$HOST}:$SUB_PORT$SUB_PATH$SUBID"
 }
 
 # Юнит kit-sub: без root (DynamicUser), конфиг и сертификат – через LoadCredential.
@@ -1456,6 +1523,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PORTAL_PORT=10465
+EnvironmentFile=-/etc/kit/kit.env
 ExecStart=/usr/bin/python3 /usr/local/lib/kit-portal/kit_portal.py serve
 Restart=on-failure
 RestartSec=5

@@ -578,6 +578,10 @@ check_services() {
   fi
   if systemctl is-active -q kit-portal 2>/dev/null; then
     c_ok "служба kit-portal работает"
+    local p_port=${PORTAL_PORT:-10465}
+    if ! ss -ltnH "sport = :$p_port" 2>/dev/null | grep -q "$p_port"; then
+      c_bad svc:kit-portal "служба kit-portal не слушает внутренний порт $p_port"
+    fi
   elif systemctl list-unit-files kit-portal.service 2>/dev/null | grep -q kit-portal; then
     c_bad svc:kit-portal "служба kit-portal не работает (journalctl -u kit-portal -n 50)"
   fi

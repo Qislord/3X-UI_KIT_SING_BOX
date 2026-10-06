@@ -5,6 +5,8 @@ Wants=network-online.target
 
 [Service]
 Type=simple
+Environment=PORTAL_PORT=10465
+EnvironmentFile=-/etc/kit/kit.env
 ExecStart=/usr/bin/python3 /usr/local/lib/kit-portal/kit_portal.py serve
 Restart=on-failure
 RestartSec=5

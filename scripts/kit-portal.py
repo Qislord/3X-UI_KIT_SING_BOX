@@ -24,6 +24,7 @@ import re
 import secrets
 import socket
 import sqlite3
+import ssl
 import string
 import sys
 import threading
@@ -51,14 +52,12 @@ def get_static_dir():
 
 STATIC_DIR = get_static_dir()
 
-PORTAL_PORT = int(os.environ.get("PORTAL_PORT", "2098"))
-PORTAL_LISTEN = os.environ.get("PORTAL_LISTEN", "127.0.0.1")
-
 # Значения по умолчанию (переопределяются из env-файлов)
 ENV = {
     "HOST": "127.0.0.1",
-    "PORTAL_DOMAIN": "skip-flash.ru",
-    "SUB_BASE": "https://skip-flash.ru/sub/",
+    "PORTAL_DOMAIN": "",
+    "PORTAL_PORT": "10465",
+    "SUB_BASE": "",
     "SUB_PATH": "/sub/",
     "SUB_INTERNAL": "2097",
     "SINGLE": "yes",
@@ -89,8 +88,11 @@ def load_env_file(path):
 load_env_file(CONFIG_ENV_PATH)
 load_env_file(XUI_ENV_PATH)
 
+PORTAL_PORT = int(os.environ.get("PORTAL_PORT") or ENV.get("PORTAL_PORT", "10465"))
+PORTAL_LISTEN = os.environ.get("PORTAL_LISTEN") or ENV.get("PORTAL_LISTEN", "127.0.0.1")
+
 # Домен портала: берем PORTAL_DOMAIN, либо DOMAIN, либо HOST
-DOMAIN = os.environ.get("PORTAL_DOMAIN") or ENV.get("PORTAL_DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", "skip-flash.ru")
+DOMAIN = os.environ.get("PORTAL_DOMAIN") or ENV.get("PORTAL_DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", "127.0.0.1")
 PORTAL_URL = f"https://{DOMAIN}"
 
 
@@ -292,35 +294,38 @@ def db_list_users():
 
 
 # --- Сессии и Rate Limiting ---
-def is_rate_limited(ip: str) -> bool:
+def is_rate_limited(ip: str, username: str = "") -> bool:
     """Не более 5 попыток входа за последние 5 минут (300 сек)."""
+    key = f"{ip}:{username.lower()}" if ip in ("127.0.0.1", "::1") and username else ip
     conn = get_db()
     now = int(time.time())
     cutoff = now - 300
     try:
         with conn:
             conn.execute("DELETE FROM login_attempts WHERE attempt_time < ?", (now - 3600,))
-            row = conn.execute("SELECT COUNT(*) as cnt FROM login_attempts WHERE ip = ? AND attempt_time >= ?", (ip, cutoff)).fetchone()
+            row = conn.execute("SELECT COUNT(*) as cnt FROM login_attempts WHERE ip = ? AND attempt_time >= ?", (key, cutoff)).fetchone()
             return row["cnt"] >= 5
     finally:
         conn.close()
 
 
-def record_login_attempt(ip: str):
+def record_login_attempt(ip: str, username: str = ""):
+    key = f"{ip}:{username.lower()}" if ip in ("127.0.0.1", "::1") and username else ip
     conn = get_db()
     now = int(time.time())
     try:
         with conn:
-            conn.execute("INSERT INTO login_attempts (ip, attempt_time) VALUES (?, ?)", (ip, now))
+            conn.execute("INSERT INTO login_attempts (ip, attempt_time) VALUES (?, ?)", (key, now))
     finally:
         conn.close()
 
 
-def clear_login_attempts(ip: str):
+def clear_login_attempts(ip: str, username: str = ""):
+    key = f"{ip}:{username.lower()}" if ip in ("127.0.0.1", "::1") and username else ip
     conn = get_db()
     try:
         with conn:
-            conn.execute("DELETE FROM login_attempts WHERE ip = ?", (ip,))
+            conn.execute("DELETE FROM login_attempts WHERE ip = ?", (key,))
     finally:
         conn.close()
 
@@ -374,40 +379,44 @@ def get_3xui_client_info(username: str) -> dict:
     base_path = ENV.get("XUI_WEB_BASE_PATH", "").strip("/")
     path_prefix = f"/{base_path}" if base_path else ""
 
-    url = f"http://127.0.0.1:{port}{path_prefix}/panel/api/clients/list"
-    req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
 
-    try:
-        with urllib.request.urlopen(req, timeout=5) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            if not data.get("success"):
-                return {}
-            clients = data.get("obj") or []
-            if isinstance(clients, dict) and "clients" in clients:
-                clients = clients["clients"]
+    for scheme in ("https", "http"):
+        url = f"{scheme}://127.0.0.1:{port}{path_prefix}/panel/api/clients/list"
+        req = urllib.request.Request(url, headers={"Authorization": f"Bearer {token}"})
+        try:
+            with urllib.request.urlopen(req, timeout=5, context=ctx if scheme == "https" else None) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                if not data.get("success"):
+                    continue
+                clients = data.get("obj") or []
+                if isinstance(clients, dict) and "clients" in clients:
+                    clients = clients["clients"]
 
-            # Ищем клиента с email == username
-            matched = [c for c in clients if c.get("email") == username]
-            if not matched:
-                return {}
-            c = matched[0]
-            traffic = c.get("traffic") or {}
-            up = traffic.get("up", 0)
-            down = traffic.get("down", 0)
-            return {
-                "email": c.get("email"),
-                "subId": c.get("subId"),
-                "enable": c.get("enable", True),
-                "totalGB": c.get("totalGB", 0),
-                "expiryTime": c.get("expiryTime", 0),
-                "up": up,
-                "down": down,
-                "used": up + down,
-                "limitIp": c.get("limitIp", 0),
-            }
-    except Exception as e:
-        print(f"[WARN] Ошибка обращения к 3X-UI API: {e}", file=sys.stderr)
-        return {}
+                # Ищем клиента с email == username
+                matched = [c for c in clients if c.get("email") == username]
+                if not matched:
+                    return {}
+                c = matched[0]
+                traffic = c.get("traffic") or {}
+                up = traffic.get("up", 0)
+                down = traffic.get("down", 0)
+                return {
+                    "email": c.get("email"),
+                    "subId": c.get("subId"),
+                    "enable": c.get("enable", True),
+                    "totalGB": c.get("totalGB", 0),
+                    "expiryTime": c.get("expiryTime", 0),
+                    "up": up,
+                    "down": down,
+                    "used": up + down,
+                    "limitIp": c.get("limitIp", 0),
+                }
+        except Exception:
+            continue
+    return {}
 
 
 # --- Парсер ссылок подписки и генератор Sing-Box ---
@@ -415,28 +424,34 @@ def fetch_raw_subscription(sub_id: str) -> str:
     """Загружает исходную подписку из локального бекенда 3X-UI."""
     sub_internal = ENV.get("SUB_INTERNAL", "2097")
     sub_path = "/" + ENV.get("SUB_PATH", "sub").strip("/") + "/"
-    host = ENV.get("HOST", "127.0.0.1")
+    host = ENV.get("PORTAL_DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", "127.0.0.1")
 
-    url = f"http://127.0.0.1:{sub_internal}{sub_path}{sub_id}"
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "v2rayN/7.0",
-        "Host": host,
-        "Accept": "*/*"
-    })
-    try:
-        with urllib.request.urlopen(req, timeout=10) as r:
-            body = r.read().decode("utf-8", "replace").strip()
-            # Если вернулась строка base64, декодируем её
-            if "://" not in body:
-                try:
-                    padding = "=" * (-len(body) % 4)
-                    body = base64.b64decode(body + padding).decode("utf-8", "replace").strip()
-                except Exception:
-                    pass
-            return body
-    except Exception as e:
-        print(f"[ERROR] Ошибка загрузки подписки {sub_id}: {e}", file=sys.stderr)
-        return ""
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
+    for scheme in ("http", "https"):
+        url = f"{scheme}://127.0.0.1:{sub_internal}{sub_path}{sub_id}"
+        req = urllib.request.Request(url, headers={
+            "User-Agent": "v2rayN/7.0",
+            "Host": host,
+            "Accept": "*/*"
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=10, context=ctx if scheme == "https" else None) as r:
+                body = r.read().decode("utf-8", "replace").strip()
+                # Если вернулась строка base64, декодируем её
+                if "://" not in body:
+                    try:
+                        padding = "=" * (-len(body) % 4)
+                        body = base64.b64decode(body + padding).decode("utf-8", "replace").strip()
+                    except Exception:
+                        pass
+                if body:
+                    return body
+        except Exception:
+            continue
+    return ""
 
 
 def parse_query_params(qs: str) -> dict:
@@ -846,10 +861,15 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
     sys_version = ""
 
     def get_client_ip(self) -> str:
-        # Учитываем X-Real-IP / X-Forwarded-For от Nginx
-        fwd = self.headers.get("X-Real-IP") or self.headers.get("X-Forwarded-For")
+        # X-Real-IP принудительно выставляется Nginx (не может быть подделан клиентом)
+        real_ip = self.headers.get("X-Real-IP")
+        if real_ip:
+            return real_ip.strip()
+        fwd = self.headers.get("X-Forwarded-For")
         if fwd:
-            return fwd.split(",")[0].strip()
+            parts = [p.strip() for p in fwd.split(",") if p.strip()]
+            if parts:
+                return parts[-1]
         return self.client_address[0]
 
     def send_json(self, status: int, data: dict, headers: dict = None):
@@ -858,11 +878,20 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         if headers:
             for k, v in headers.items():
-                self.send_header(k, v)
+                safe_v = str(v).replace("\r", "").replace("\n", "")
+                try:
+                    safe_v.encode("latin-1")
+                except UnicodeEncodeError:
+                    safe_v = safe_v.encode("ascii", "replace").decode("ascii")
+                self.send_header(k, safe_v)
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
 
     def send_html(self, status: int, html_text: str):
         body = html_text.encode("utf-8")
@@ -870,8 +899,23 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-cache")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("X-Frame-Options", "SAMEORIGIN")
+        self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
         self.end_headers()
-        self.wfile.write(body)
+        if self.command != "HEAD":
+            self.wfile.write(body)
+
+    def do_HEAD(self):
+        self.do_GET()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.send_header("Allow", "GET, POST, HEAD, OPTIONS")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization, Cookie")
+        self.end_headers()
 
     def parse_session_cookie(self) -> str:
         cookie_header = self.headers.get("Cookie")
@@ -913,8 +957,12 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                 config = generate_singbox_config(user["sub_id"])
                 # Заголовки инфо о подписке
                 stats = get_3xui_client_info(user["username"])
+                try:
+                    title_domain = DOMAIN.encode("idna").decode("ascii") if DOMAIN else "VPN"
+                except Exception:
+                    title_domain = DOMAIN or "VPN"
                 extra_headers = {
-                    "Profile-Title": f"{DOMAIN} (Sing-Box)",
+                    "Profile-Title": f"{title_domain} (Sing-Box)",
                     "Profile-Update-Interval": "24",
                 }
                 if stats:
@@ -948,17 +996,18 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             })
 
         # 3. Статические файлы фронтенда
+        static_abs = os.path.realpath(STATIC_DIR)
         if path in ("/", "/index.html"):
-            index_file = os.path.join(STATIC_DIR, "index.html")
-            if os.path.exists(index_file):
+            index_file = os.path.join(static_abs, "index.html")
+            if os.path.isfile(index_file):
                 with open(index_file, "r", encoding="utf-8") as f:
                     return self.send_html(200, f.read())
             return self.send_html(404, "Portal frontend not found. Check portal/index.html")
 
-        # Отдача CSS, JS, SVG, картинок из STATIC_DIR
-        rel_path = path.lstrip("/")
-        file_path = os.path.join(STATIC_DIR, rel_path)
-        if os.path.isfile(file_path):
+        # Отдача CSS, JS, SVG, картинок из STATIC_DIR (с защитой от Path Traversal и URL-декодированием)
+        rel_path = urllib.parse.unquote(path).lstrip("/")
+        file_path = os.path.realpath(os.path.join(static_abs, rel_path))
+        if (file_path == static_abs or file_path.startswith(static_abs + os.sep)) and os.path.isfile(file_path):
             ctype, _ = mimetypes.guess_type(file_path)
             try:
                 with open(file_path, "rb") as f:
@@ -967,8 +1016,12 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                 self.send_header("Content-Type", ctype or "application/octet-stream")
                 self.send_header("Content-Length", str(len(content)))
                 self.send_header("Cache-Control", "public, max-age=3600")
+                self.send_header("X-Content-Type-Options", "nosniff")
+                self.send_header("X-Frame-Options", "SAMEORIGIN")
+                self.send_header("Referrer-Policy", "strict-origin-when-cross-origin")
                 self.end_headers()
-                self.wfile.write(content)
+                if self.command != "HEAD":
+                    self.wfile.write(content)
                 return
             except Exception:
                 pass
@@ -980,11 +1033,17 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
         path = parsed.path.rstrip("/")
         ip = self.get_client_ip()
 
-        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            content_len = int(self.headers.get("Content-Length", 0))
+            if content_len < 0:
+                content_len = 0
+        except (ValueError, TypeError):
+            content_len = 0
+
         if content_len > 100000:
             return self.send_json(413, {"error": "Payload too large"})
 
-        body = self.rfile.read(content_len).decode("utf-8") if content_len > 0 else "{}"
+        body = self.rfile.read(content_len).decode("utf-8", "replace") if content_len > 0 else "{}"
         try:
             data = json.loads(body)
         except Exception:
@@ -992,29 +1051,29 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
 
         # 1. Авторизация: /api/login
         if path == "/api/login":
-            if is_rate_limited(ip):
-                return self.send_json(429, {"error": "Слишком много неудачных попыток входа. Подождите 5 минут."})
-
             username = str(data.get("username", "")).strip()
             password = str(data.get("password", ""))
 
             if not username or not password:
                 return self.send_json(400, {"error": "Введите имя пользователя и пароль"})
 
+            if is_rate_limited(ip, username):
+                return self.send_json(429, {"error": "Слишком много неудачных попыток входа. Подождите 5 минут."})
+
             user = db_get_user(username)
             if not user or not user["is_active"]:
-                record_login_attempt(ip)
+                record_login_attempt(ip, username)
                 # Искусственная задержка против timing attacks
                 time.sleep(0.3)
                 return self.send_json(401, {"error": "Неверный логин или пароль"})
 
             if not verify_password(password, user["salt"], user["password_hash"]):
-                record_login_attempt(ip)
+                record_login_attempt(ip, username)
                 time.sleep(0.3)
                 return self.send_json(401, {"error": "Неверный логин или пароль"})
 
             # Успешный вход
-            clear_login_attempts(ip)
+            clear_login_attempts(ip, username)
             session_id = create_session(user["username"])
 
             cookie = http.cookies.SimpleCookie()
@@ -1025,7 +1084,7 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             cookie["kit_session"]["samesite"] = "Strict"
             cookie["kit_session"]["max-age"] = 30 * 86400
 
-            headers = {"Set-Cookie": cookie.output(header="")}
+            headers = {"Set-Cookie": cookie.output(header="").strip()}
             return self.send_json(200, {
                 "success": True,
                 "user": {"username": user["username"], "sub_token": user["sub_token"]}
@@ -1034,12 +1093,16 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
         # 2. Выход: /api/logout
         if path == "/api/logout":
             sid = self.parse_session_cookie()
-            delete_session(sid)
+            if sid:
+                delete_session(sid)
             cookie = http.cookies.SimpleCookie()
             cookie["kit_session"] = ""
             cookie["kit_session"]["path"] = "/"
+            cookie["kit_session"]["httponly"] = True
+            cookie["kit_session"]["secure"] = True
+            cookie["kit_session"]["samesite"] = "Strict"
             cookie["kit_session"]["max-age"] = 0
-            return self.send_json(200, {"success": True}, {"Set-Cookie": cookie.output(header="")})
+            return self.send_json(200, {"success": True}, {"Set-Cookie": cookie.output(header="").strip()})
 
         # 3. Смена пароля: /api/change-password
         if path == "/api/change-password":
@@ -1057,7 +1120,10 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                 return self.send_json(400, {"error": "Новый пароль должен содержать минимум 8 символов"})
 
             db_set_password(user["username"], new_pwd)
-            # Пересоздаем сессию
+            # Инвалидируем старую сессию и создаем новую
+            old_sid = self.parse_session_cookie()
+            if old_sid:
+                delete_session(old_sid)
             new_sid = create_session(user["username"])
             cookie = http.cookies.SimpleCookie()
             cookie["kit_session"] = new_sid
@@ -1066,7 +1132,7 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
             cookie["kit_session"]["secure"] = True
             cookie["kit_session"]["samesite"] = "Strict"
             cookie["kit_session"]["max-age"] = 30 * 86400
-            return self.send_json(200, {"success": True, "message": "Пароль успешно изменен"}, {"Set-Cookie": cookie.output(header="")})
+            return self.send_json(200, {"success": True, "message": "Пароль успешно изменен"}, {"Set-Cookie": cookie.output(header="").strip()})
 
         # 4. Ротация токена подписки: /api/rotate-token
         if path == "/api/rotate-token":
