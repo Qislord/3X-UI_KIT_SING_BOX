@@ -183,6 +183,7 @@
     loginView.hidden = false;
     dashboardView.hidden = true;
     headerAuth.hidden = true;
+    if (logoutBtn) logoutBtn.hidden = true;
     usernameInput.value = '';
     passwordInput.value = '';
     loginAlert.hidden = true;
@@ -194,16 +195,17 @@
     loginView.hidden = true;
     dashboardView.hidden = false;
     headerAuth.hidden = false;
+    if (logoutBtn) logoutBtn.hidden = false;
 
     try {
       const user = data.user || {};
       const stats = data.stats || {};
       const domain = data.domain || window.location.host;
 
-    // Имя бренда и пользователя
+    // Имя пользователя
     headerUsername.textContent = user.username || 'Пользователь';
     if (portalBrandTitle) {
-      portalBrandTitle.textContent = domain ? `${domain}` : 'VPN Шлюз';
+      portalBrandTitle.textContent = domain ? `${domain}` : '';
     }
 
     // 1. Ссылки на подписки
@@ -302,6 +304,9 @@
 
       const tagBadge = document.createElement('span');
       tagBadge.className = 'proxy-type-badge';
+      if (p.type === 'AMNEZIA') {
+        tagBadge.classList.add('badge-amnezia');
+      }
       tagBadge.textContent = p.type || 'PROXY';
 
       const nameSpan = document.createElement('span');
@@ -310,6 +315,13 @@
 
       infoDiv.appendChild(tagBadge);
       infoDiv.appendChild(nameSpan);
+
+      if (p.type === 'AMNEZIA') {
+        const hintSpan = document.createElement('span');
+        hintSpan.className = 'proxy-hint-tag';
+        hintSpan.textContent = 'Для AmneziaVPN';
+        infoDiv.appendChild(hintSpan);
+      }
 
       const actionsDiv = document.createElement('div');
       actionsDiv.className = 'proxy-item-actions';
@@ -320,7 +332,10 @@
       copyBtn.className = 'btn btn-sm btn-secondary';
       copyBtn.innerHTML = '📋 Копировать';
       copyBtn.addEventListener('click', () => {
-        copyToClipboard(p.link, `Ссылка на ${p.tag} скопирована!`);
+        const msg = p.type === 'AMNEZIA'
+          ? `Ссылка ${p.tag} скопирована! Откройте её в AmneziaVPN.`
+          : `Ссылка на ${p.tag} скопирована!`;
+        copyToClipboard(p.link, msg);
       });
 
       // Кнопка QR
@@ -329,7 +344,10 @@
       qrBtn.className = 'btn btn-sm btn-secondary';
       qrBtn.innerHTML = '📱 QR';
       qrBtn.addEventListener('click', () => {
-        openQrModal(p.link, `QR-код: ${p.tag}`, 'Отсканируйте камерой в приложении (V2Box, Happ, v2rayNG):');
+        const hint = p.type === 'AMNEZIA'
+          ? 'Отсканируйте камерой в приложении AmneziaVPN:'
+          : 'Отсканируйте камерой в приложении (Hiddify, V2Box, Happ, v2rayNG):';
+        openQrModal(p.link, `QR-код: ${p.tag}`, hint);
       });
 
       actionsDiv.appendChild(copyBtn);
@@ -432,14 +450,14 @@
   copySingboxSubBtn.addEventListener('click', () => {
     const url = singboxSubUrlInput.value;
     if (url) {
-      copyToClipboard(url, '🧠 Ссылка на Sing-box JSON скопирована!');
+      copyToClipboard(url, '🧠 Умная ссылка (Sing-box / Hiddify) скопирована!');
     }
   });
 
   copyAllRawBtn.addEventListener('click', () => {
     const text = rawAllTextarea.value;
     if (text) {
-      copyToClipboard(text, '📋 Все протоколы скопированы! Можно вставлять в V2Box/v2rayN');
+      copyToClipboard(text, '📋 Все протоколы скопированы в буфер обмена!');
     }
   });
 
@@ -453,12 +471,12 @@
     });
   });
 
-  // Быстрые кнопки копирования из инструкций (Sing-box)
+  // Быстрые кнопки копирования из инструкций (Умная Sing-box)
   document.querySelectorAll('.copy-quick-singbox-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
       const url = singboxSubUrlInput.value;
       if (url) {
-        copyToClipboard(url, '🧠 Ссылка на Sing-box скопирована в буфер обмена!');
+        copyToClipboard(url, '🧠 Умная ссылка скопирована! Вставьте её в Hiddify или Karing.');
       }
     });
   });

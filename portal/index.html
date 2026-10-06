@@ -3,32 +3,31 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Личный кабинет | Подключение к VPN</title>
-  <meta name="description" content="Личный кабинет пользователя для быстрого подключения к приватному VPN-шлюзу">
+  <title>Личный кабинет пользователя</title>
+  <meta name="description" content="Личный кабинет пользователя для быстрого подключения к приватной сети">
   <meta name="robots" content="noindex, nofollow">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
-  <link rel="stylesheet" href="style.css?v=7">
+  <link rel="stylesheet" href="style.css?v=8">
 </head>
 <body>
 
   <!-- ================= ВЕРХНЯЯ ПАНЕЛЬ (HEADER) ================= -->
   <header class="app-header">
     <div class="container header-container">
-      <div class="brand">
-        <span class="brand-icon">⚡</span>
-        <span class="brand-name" id="portalBrandTitle">VPN Шлюз</span>
-        <span class="brand-tag">ONLINE</span>
+      <div class="header-left">
+        <div class="header-auth" id="headerAuth" hidden>
+          <span class="user-pill">
+            <span class="user-icon">👤</span>
+            <span class="username" id="headerUsername">user</span>
+          </span>
+        </div>
       </div>
-      <div class="header-status">
-        <span class="status-dot"></span>
-        <span class="status-text">Шлюз работает</span>
-      </div>
-      <div class="header-auth" id="headerAuth" hidden>
-        <span class="user-pill">
-          <span class="user-icon">👤</span>
-          <span class="username" id="headerUsername">user</span>
-        </span>
-        <button type="button" class="btn btn-sm btn-secondary" id="logoutBtn" title="Выйти из аккаунта">
+      <div class="header-right">
+        <div class="header-status">
+          <span class="status-dot"></span>
+          <span class="status-text">Онлайн</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-secondary" id="logoutBtn" title="Выйти из аккаунта" hidden>
           Выйти
         </button>
       </div>
@@ -126,15 +125,15 @@
 
           <!-- Табы выбора формата подключения -->
           <div class="conn-mode-tabs" role="tablist">
-            <button type="button" class="conn-tab-btn active" data-target="conn-universal">
+            <button type="button" class="conn-tab-btn active" data-target="conn-singbox">
               <span class="tab-badge tab-badge-rec">Рекомендуется</span>
-              <span class="tab-title">1. Универсальная подписка</span>
-              <span class="tab-sub">Для V2Box, Hiddify, Happ, v2rayNG</span>
+              <span class="tab-title">1. Умная подписка</span>
+              <span class="tab-sub">Для Hiddify, Karing (DoH + обход РФ)</span>
             </button>
-            <button type="button" class="conn-tab-btn" data-target="conn-singbox">
-              <span class="tab-badge tab-badge-smart">DoH + РФ</span>
-              <span class="tab-title">2. Sing-Box профиль</span>
-              <span class="tab-sub">DNS 1.1.1.1, авто-выбор, обход сайтов РФ</span>
+            <button type="button" class="conn-tab-btn" data-target="conn-universal">
+              <span class="tab-badge tab-badge-smart">Базовая</span>
+              <span class="tab-title">2. Универсальная подписка</span>
+              <span class="tab-sub">Для V2Box, Happ, v2rayNG, Streisand</span>
             </button>
             <button type="button" class="conn-tab-btn" data-target="conn-raw">
               <span class="tab-badge tab-badge-raw">Ключи</span>
@@ -144,50 +143,17 @@
           </div>
 
           <div class="card-body">
-            <!-- 1. Контент: Универсальная подписка -->
-            <div class="conn-content active" id="conn-universal">
-              <div class="notice-box notice-info">
-                <strong>💡 Самый простой способ (1 клик):</strong>
-                Эта ссылка работает во всех стандартных приложениях: <b>V2Box</b> (iOS/Mac), <b>Hiddify</b> (Windows/Android), <b>v2rayNG</b> (Android), <b>Happ</b>, <b>Karing</b>.
-                Она автоматически загружает все доступные протоколы и обновляет их при изменении.
-              </div>
-
-              <div class="form-group">
-                <label class="form-label" for="universalSubUrlInput">Универсальная ссылка на подписку:</label>
-                <div class="copy-input-row">
-                  <input type="text" id="universalSubUrlInput" class="form-control mono-font" readonly spellcheck="false" placeholder="Загрузка ссылки...">
-                  <button type="button" class="btn btn-primary" id="copyUniversalSubBtn">
-                    📋 Копировать
-                  </button>
-                  <button type="button" class="btn btn-secondary" id="qrUniversalBtn">
-                    📱 QR-код
-                  </button>
-                </div>
-              </div>
-
-              <div class="apps-list-row">
-                <span class="apps-list-label">Подходит для:</span>
-                <span class="app-tag">🍏 V2Box</span>
-                <span class="app-tag">🤖 Hiddify</span>
-                <span class="app-tag">🤖 v2rayNG</span>
-                <span class="app-tag">🪟 v2rayN</span>
-                <span class="app-tag">⚡ Happ</span>
-                <span class="app-tag">🛡️ Karing</span>
-                <span class="app-tag">🚀 Streisand</span>
-              </div>
-            </div>
-
-            <!-- 2. Контент: Sing-box Умная подписка -->
-            <div class="conn-content" id="conn-singbox">
+            <!-- 1. Контент: Sing-box Умная подписка (Рекомендуется) -->
+            <div class="conn-content active" id="conn-singbox">
               <div class="notice-box notice-success">
-                <strong>🧠 Умный Sing-box профиль:</strong>
-                Включает <b>Cloudflare DNS DoH (1.1.1.1)</b> без утечек провайдеру, 
-                <b>прямой доступ к российским сайтам и банкам</b> (Сбер, Госуслуги, Ozon, Кинопоиск работают без VPN на полной скорости), 
-                блокировку QUIC для 4K YouTube и автоматический выбор самого быстрого протокола.
+                <strong>🧠 Умный профиль (Рекомендуется для Hiddify и Karing):</strong>
+                Включает встроенный <b>Cloudflare DNS DoH (1.1.1.1)</b> без утечек провайдеру, 
+                <b>прямой доступ к российским сайтам и банкам</b> (Сбер, Госуслуги, Ozon, Кинопоиск работают без VPN на полной скорости вашего интернета), 
+                блокировку QUIC для плавного YouTube 4K и автоматический выбор самого быстрого протокола.
               </div>
 
               <div class="form-group">
-                <label class="form-label" for="singboxSubUrlInput">Ссылка на Sing-box профиль (JSON):</label>
+                <label class="form-label" for="singboxSubUrlInput">Ссылка на Умную подписку (Sing-box JSON):</label>
                 <div class="copy-input-row">
                   <input type="text" id="singboxSubUrlInput" class="form-control mono-font" readonly spellcheck="false" placeholder="Загрузка ссылки...">
                   <button type="button" class="btn btn-primary" id="copySingboxSubBtn">
@@ -217,7 +183,7 @@
                     </tr>
                     <tr>
                       <td><b>Обход РФ сайтов</b></td>
-                      <td>Банки, Госуслуги, Госуслуги, доставка и маркетплейсы работают напрямую без замедлений</td>
+                      <td>Банки, Госуслуги, доставка и маркетплейсы открываются напрямую без замедлений и не требуют выключения VPN</td>
                     </tr>
                     <tr>
                       <td><b>Block UDP 443</b></td>
@@ -225,10 +191,17 @@
                     </tr>
                     <tr>
                       <td><b>Auto URLTest</b></td>
-                      <td>Программа сама выбирает самый быстрый рабочий протокол на лету</td>
+                      <td>Программа сама выбирает самый быстрый рабочий узел на лету</td>
                     </tr>
                   </tbody>
                 </table>
+              </div>
+
+              <div class="apps-list-row" style="margin-top: 14px;">
+                <span class="apps-list-label">Идеально для:</span>
+                <span class="app-tag">⚡ Hiddify (все ОС)</span>
+                <span class="app-tag">🛡️ Karing</span>
+                <span class="app-tag">📦 NekoBox</span>
               </div>
 
               <div style="margin-top: 14px;">
@@ -238,12 +211,44 @@
               </div>
             </div>
 
+            <!-- 2. Контент: Универсальная подписка -->
+            <div class="conn-content" id="conn-universal">
+              <div class="notice-box notice-info">
+                <strong>💡 Стандартная подписка (1 клик):</strong>
+                Универсальный формат для классических приложений: <b>V2Box</b> (iOS/Mac), <b>v2rayNG</b> (Android), <b>v2rayN</b> (Windows), <b>Happ</b>, <b>Streisand</b>.
+                Автоматически загружает все доступные протоколы и обновляет их при изменении.
+              </div>
+
+              <div class="form-group">
+                <label class="form-label" for="universalSubUrlInput">Универсальная ссылка на подписку:</label>
+                <div class="copy-input-row">
+                  <input type="text" id="universalSubUrlInput" class="form-control mono-font" readonly spellcheck="false" placeholder="Загрузка ссылки...">
+                  <button type="button" class="btn btn-primary" id="copyUniversalSubBtn">
+                    📋 Копировать
+                  </button>
+                  <button type="button" class="btn btn-secondary" id="qrUniversalBtn">
+                    📱 QR-код
+                  </button>
+                </div>
+              </div>
+
+              <div class="apps-list-row">
+                <span class="apps-list-label">Подходит для:</span>
+                <span class="app-tag">🍏 V2Box</span>
+                <span class="app-tag">🤖 v2rayNG</span>
+                <span class="app-tag">🪟 v2rayN</span>
+                <span class="app-tag">⚡ Happ</span>
+                <span class="app-tag">🚀 Streisand</span>
+              </div>
+            </div>
+
             <!-- 3. Контент: Прямые ключи (Raw) -->
             <div class="conn-content" id="conn-raw">
               <div class="notice-box notice-warning">
                 <strong>🔑 Прямые ссылки каждого подключения:</strong>
-                Здесь находятся полные ссылки протоколов (VLESS REALITY, Hysteria2, AmneziaWG).
-                Вы можете скопировать <b>все ключи сразу</b> одной кнопкой и вставить их в <b>V2Box</b>, <b>v2rayN</b> или <b>Happ</b> через <i>«Import from clipboard»</i>.
+                Здесь находятся индивидуальные ссылки протоколов (VLESS REALITY, Hysteria2, AmneziaWG).
+                Вы можете скопировать все ключи сразу одной кнопкой для ручного импорта.<br>
+                <i>💡 Подключения <b>AmneziaWG</b> (vpn://) открываются через официальное приложение <b>AmneziaVPN</b> на ПК и смартфонах.</i>
               </div>
 
               <div class="raw-actions-bar">
@@ -272,186 +277,132 @@
         <div class="card guides-card">
           <div class="card-header">
             <h3 class="card-title">📖 Пошаговые инструкции по настройке</h3>
-            <p class="card-subtitle">Выберите ваше устройство или Sing-box для подробного руководства:</p>
+            <p class="card-subtitle">Выберите приложение или платформу для подключения:</p>
           </div>
 
           <!-- Табы платформ -->
           <div class="platform-tabs" role="tablist">
-            <button type="button" class="tab-btn active" data-tab="tab-singbox">🧠 Sing-box (DoH + РФ)</button>
-            <button type="button" class="tab-btn" data-tab="tab-ios">🍏 iPhone / iPad</button>
-            <button type="button" class="tab-btn" data-tab="tab-android">🤖 Android</button>
-            <button type="button" class="tab-btn" data-tab="tab-windows">🪟 Windows (ПК)</button>
-            <button type="button" class="tab-btn" data-tab="tab-macos">🍎 macOS (Mac)</button>
+            <button type="button" class="tab-btn active" data-tab="tab-hiddify">⚡ Hiddify (Рекомендуется)</button>
+            <button type="button" class="tab-btn" data-tab="tab-ios">🍏 iPhone / iPad (V2Box)</button>
+            <button type="button" class="tab-btn" data-tab="tab-android">🤖 Android (v2rayNG)</button>
+            <button type="button" class="tab-btn" data-tab="tab-windows">🪟 Windows (v2rayN)</button>
+            <button type="button" class="tab-btn" data-tab="tab-macos">🍎 macOS (V2Box)</button>
           </div>
 
           <div class="card-body">
 
-            <!-- Вкладка 1: Sing-Box (Специальная полная инструкция) -->
-            <div class="tab-content active" id="tab-singbox">
-              <div class="notice-box notice-info">
-                <strong>Особенности настройки Sing-box:</strong>
-                Sing-box подключается по специальной ссылке (вкладка <b>«2. Sing-Box профиль»</b> выше).
-                Ниже детальные шаги для каждой операционной системы.
+            <!-- Вкладка 1: Hiddify (Главная рекомендуемая инструкция) -->
+            <div class="tab-content active" id="tab-hiddify">
+              <div class="notice-box notice-success">
+                <strong>🚀 Почему Hiddify — лучший выбор:</strong>
+                Приложение Hiddify работает на современном ядре Sing-box. При подключении по <b>Умной подписке</b> (вариант №1) всё работает сразу «из коробки»:
+                <ul style="margin: 8px 0 0 18px; line-height: 1.6;">
+                  <li><b>Не нужно отключать VPN</b>: российские сайты, Госуслуги, банки, Ozon и Кинопоиск работают напрямую без замедлений на полной скорости.</li>
+                  <li><b>Безопасный DNS</b>: все DNS-запросы зашифрованы через Cloudflare DoH (1.1.1.1) без слежки провайдера.</li>
+                  <li><b>Плавный YouTube 4K</b>: автоматический обход замедлений за счет встроенной блокировки QUIC.</li>
+                  <li><b>Единый интерфейс</b>: одинаково простой и удобный на телефонах, планшетах и компьютерах.</li>
+                </ul>
               </div>
 
-              <div class="guide-sections">
-
-                <!-- 1.1 iPhone Sing-box -->
-                <div class="device-guide-block">
-                  <h4 class="device-title">🍏 Настройка Sing-box на iPhone / iPad (iOS):</h4>
-                  <div class="steps-list">
-                    <div class="step-item">
-                      <span class="step-num">1</span>
-                      <div class="step-body">
-                        <strong>Установите приложение Sing-box:</strong>
-                        <p>Откройте App Store и найдите <b>sing-box</b> (разработчик SFI / nekohasekai) или перейдите по ссылке:</p>
-                        <a href="https://apps.apple.com/app/sing-box/id6451272673" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
-                          🍏 Скачать sing-box в App Store
-                        </a>
-                      </div>
+              <div class="hiddify-downloads-card">
+                <h4 class="subheading" style="margin-top: 0; margin-bottom: 6px;">1. Установите Hiddify на ваше устройство:</h4>
+                <div class="hiddify-grid">
+                  <a href="https://apps.apple.com/app/hiddify-proxy-vpn/id6593660983" target="_blank" rel="noopener" class="hiddify-dl-btn">
+                    <span class="dl-icon">🍏</span>
+                    <div class="dl-info">
+                      <span class="dl-platform">iPhone / iPad</span>
+                      <span class="dl-store">App Store</span>
                     </div>
-
-                    <div class="step-item">
-                      <span class="step-num">2</span>
-                      <div class="step-body">
-                        <strong>Скопируйте ссылку на профиль:</strong>
-                        <p>Нажмите кнопку ниже, чтобы скопировать ссылку умного профиля Sing-box в буфер обмена:</p>
-                        <button type="button" class="btn btn-sm btn-secondary copy-quick-singbox-btn">
-                          📋 Скопировать ссылку Sing-box
-                        </button>
-                      </div>
+                  </a>
+                  <a href="https://play.google.com/store/apps/details?id=app.hiddify.com" target="_blank" rel="noopener" class="hiddify-dl-btn">
+                    <span class="dl-icon">🤖</span>
+                    <div class="dl-info">
+                      <span class="dl-platform">Android</span>
+                      <span class="dl-store">Google Play</span>
                     </div>
-
-                    <div class="step-item">
-                      <span class="step-num">3</span>
-                      <div class="step-body">
-                        <strong>Добавьте профиль в приложении:</strong>
-                        <ol class="step-sublist">
-                          <li>Откройте приложение <b>sing-box</b> на iPhone.</li>
-                          <li>В нижнем меню перейдите во вкладку <b>Profiles</b> (Профили).</li>
-                          <li>Нажмите кнопку <b>New Profile</b> (Новый профиль) или <b>«+»</b>.</li>
-                          <li>В поле <b>Name</b> напишите любое имя (например: <code>Мой VPN</code>).</li>
-                          <li>В поле <b>Type</b> обязательно выберите <b>Remote</b> (Удаленный).</li>
-                          <li>В поле <b>URL</b> вставьте скопированную ссылку (или нажмите иконку QR и отсканируйте код).</li>
-                          <li>В строке <b>Auto Update</b> установите <code>1440</code> (обновление раз в сутки).</li>
-                          <li>В правом верхнем углу нажмите <b>Create</b> / <b>Save</b>.</li>
-                        </ol>
-                      </div>
+                  </a>
+                  <a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" rel="noopener" class="hiddify-dl-btn">
+                    <span class="dl-icon">🤖</span>
+                    <div class="dl-info">
+                      <span class="dl-platform">Android (APK)</span>
+                      <span class="dl-store">GitHub Releases</span>
                     </div>
-
-                    <div class="step-item">
-                      <span class="step-num">4</span>
-                      <div class="step-body">
-                        <strong>Запуск:</strong>
-                        <p>
-                          Поставьте галочку напротив созданного профиля. Перейдите на вкладку <b>Dashboard</b> и включите переключатель <b>Enabled</b>. 
-                          При первом включении iOS спросит разрешение на добавление конфигурации VPN — нажмите <b>«Разрешить»</b>. Готово!
-                        </p>
-                      </div>
+                  </a>
+                  <a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" rel="noopener" class="hiddify-dl-btn">
+                    <span class="dl-icon">🪟</span>
+                    <div class="dl-info">
+                      <span class="dl-platform">Windows (.exe)</span>
+                      <span class="dl-store">Скачать установщик</span>
                     </div>
+                  </a>
+                  <a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" rel="noopener" class="hiddify-dl-btn">
+                    <span class="dl-icon">🍎</span>
+                    <div class="dl-info">
+                      <span class="dl-platform">macOS (Mac)</span>
+                      <span class="dl-store">DMG / Mac App Store</span>
+                    </div>
+                  </a>
+                </div>
+              </div>
+
+              <div class="steps-list">
+                <div class="step-item">
+                  <span class="step-num">2</span>
+                  <div class="step-body">
+                    <strong>Скопируйте ссылку Умной подписки:</strong>
+                    <p>Нажмите кнопку ниже, чтобы скопировать ссылку Sing-box JSON в буфер обмена:</p>
+                    <button type="button" class="btn btn-sm btn-primary copy-quick-singbox-btn">
+                      📋 Скопировать Умную ссылку (Sing-box)
+                    </button>
                   </div>
                 </div>
 
-                <hr class="divider">
-
-                <!-- 1.2 Android Sing-box -->
-                <div class="device-guide-block">
-                  <h4 class="device-title">🤖 Настройка Sing-box на Android:</h4>
-                  <div class="steps-list">
-                    <div class="step-item">
-                      <span class="step-num">1</span>
-                      <div class="step-body">
-                        <strong>Установите sing-box:</strong>
-                        <p>Скачайте официальный клиент из Google Play или APK с GitHub:</p>
-                        <div class="button-row">
-                          <a href="https://play.google.com/store/apps/details?id=io.nekohasekai.sfa" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
-                            🤖 sing-box в Google Play
-                          </a>
-                          <a href="https://github.com/SagerNet/sing-box/releases" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
-                            GitHub Releases (APK)
-                          </a>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div class="step-item">
-                      <span class="step-num">2</span>
-                      <div class="step-body">
-                        <strong>Импортируйте профиль:</strong>
-                        <ol class="step-sublist">
-                          <li>Скопируйте ссылку профиля кнопкой: 
-                            <button type="button" class="btn btn-xs btn-secondary copy-quick-singbox-btn">📋 Скопировать</button>
-                          </li>
-                          <li>В приложении перейдите в раздел <b>Profiles</b>.</li>
-                          <li>Нажмите <b>«+»</b> → <b>Import from URL</b>.</li>
-                          <li>Вставьте ссылку и сохраните профиль.</li>
-                        </ol>
-                      </div>
-                    </div>
-
-                    <div class="step-item">
-                      <span class="step-num">3</span>
-                      <div class="step-body">
-                        <strong>Включение:</strong>
-                        <p>
-                          Выберите добавленный профиль на экране <b>Dashboard</b> и нажмите кнопку <b>Start</b>. Подтвердите создание VPN-соединения.
-                        </p>
-                      </div>
-                    </div>
+                <div class="step-item">
+                  <span class="step-num">3</span>
+                  <div class="step-body">
+                    <strong>Добавьте профиль в Hiddify и подключитесь:</strong>
+                    <ol class="step-sublist">
+                      <li>Откройте приложение <b>Hiddify</b>.</li>
+                      <li>Приложение автоматически определит ссылку в буфере и предложит добавить её. Либо нажмите <b>«Новый профиль»</b> (или <b>«+»</b> вверху) → <b>«Добавить из буфера обмена»</b>.</li>
+                      <li>Убедитесь, что переключатель <b>«Режим TUN»</b> включен (в настройках или на главном экране).</li>
+                      <li>Нажмите большую круглую кнопку подключения в центре экрана. <b>Готово!</b></li>
+                    </ol>
                   </div>
                 </div>
+              </div>
 
-                <hr class="divider">
-
-                <!-- 1.3 Windows / Mac Sing-box -->
-                <div class="device-guide-block">
-                  <h4 class="device-title">🪟 Windows и 🍎 macOS:</h4>
-                  <div class="notice-box notice-info">
-                    <strong>Рекомендация для компьютеров:</strong> 
-                    Для настольных ПК удобнее всего использовать <b>Hiddify</b> (он полностью работает на ядре Sing-box) либо <b>NekoBox</b>.
+              <div class="alt-clients-box">
+                <h4 class="subheading" style="margin-bottom: 6px;">Альтернативные приложения с поддержкой Умной подписки:</h4>
+                <p class="text-dim" style="font-size: 0.86rem; margin-bottom: 10px;">Если вам по какой-то причине не подходит Hiddify, вы можете подключить эту же Умную ссылку в других клиентах на базе Sing-box:</p>
+                <div class="alt-clients-grid">
+                  <div class="alt-client-card">
+                    <div>
+                      <div class="alt-client-header">
+                        <span class="alt-client-icon">🛡️</span>
+                        <strong>Karing</strong>
+                      </div>
+                      <p class="alt-client-desc">Быстрый кроссплатформенный клиент для iOS, Android, Windows и macOS с полной поддержкой ядра Sing-box, DoH и маршрутов.</p>
+                    </div>
+                    <a href="https://karing.app" target="_blank" rel="noopener" class="btn btn-xs btn-secondary">Сайт Karing / Загрузки</a>
                   </div>
-                  <div class="steps-list">
-                    <div class="step-item">
-                      <span class="step-num">1</span>
-                      <div class="step-body">
-                        <strong>Скачайте Hiddify:</strong>
-                        <div class="button-row">
-                          <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
-                            ⬇️ Скачать Hiddify для Windows / Mac
-                          </a>
-                        </div>
+                  <div class="alt-client-card">
+                    <div>
+                      <div class="alt-client-header">
+                        <span class="alt-client-icon">📦</span>
+                        <strong>NekoBox / NekoRay</strong>
                       </div>
+                      <p class="alt-client-desc">Гибкое приложение для Android и Windows для продвинутых пользователей с поддержкой Sing-box профилей.</p>
                     </div>
-
-                    <div class="step-item">
-                      <span class="step-num">2</span>
-                      <div class="step-body">
-                        <strong>Добавьте профиль:</strong>
-                        <p>
-                          Скопируйте <b>Sing-box ссылку</b> выше. Откройте Hiddify → нажмите <b>«Новый профиль»</b> → <b>«Добавить из буфера обмена»</b>.
-                        </p>
-                      </div>
-                    </div>
-
-                    <div class="step-item">
-                      <span class="step-num">3</span>
-                      <div class="step-body">
-                        <strong>Включите TUN Mode и Подключитесь:</strong>
-                        <p>
-                          В настройках Hiddify включите тумблер <b>«Режим TUN» (TUN Mode)</b> — это направит трафик всех программ через умную маршрутизацию. Нажмите большую круглую кнопку подключения!
-                        </p>
-                      </div>
-                    </div>
+                    <a href="https://github.com/MatsuriDayo/NekoBoxForAndroid/releases" target="_blank" rel="noopener" class="btn btn-xs btn-secondary">GitHub NekoBox</a>
                   </div>
                 </div>
-
               </div>
             </div>
 
-            <!-- Вкладка 2: iOS (Общая) -->
+            <!-- Вкладка 2: iOS (V2Box) -->
             <div class="tab-content" id="tab-ios">
               <div class="notice-box notice-info">
-                <strong>Рекомендуемое приложение для iPhone / iPad:</strong> <b>V2Box</b> (самое простое, работает в 1 клик) или <b>Happ</b>.
+                <strong>Классическое подключение для iPhone / iPad:</strong> <b>V2Box</b> (самое простое альтернативное приложение) или <b>Happ</b>. Работает по <b>Универсальной ссылке</b>.
               </div>
 
               <div class="steps-list">
@@ -470,7 +421,7 @@
                   <span class="step-num">2</span>
                   <div class="step-body">
                     <strong>Скопируйте ссылку подписки:</strong>
-                    <p>Скопируйте <b>Универсальную подписку</b> (вариант №1 выше):</p>
+                    <p>Скопируйте <b>Универсальную подписку</b> (вариант №2 выше):</p>
                     <button type="button" class="btn btn-sm btn-secondary copy-quick-sub-btn">
                       📋 Скопировать Универсальную ссылку
                     </button>
@@ -484,42 +435,29 @@
                     <ol class="step-sublist">
                       <li>Откройте <b>V2Box</b>.</li>
                       <li>В нижнем меню перейдите во вкладку <b>Configs</b>.</li>
-                      <li>В правом верхнем углу нажмите <b>«+»</b>.</li>
-                      <li>Выберите <b>Add Subscription</b>.</li>
+                      <li>В правом верхнем углу нажмите <b>«+»</b> → <b>Add Subscription</b>.</li>
                       <li>Вставьте скопированную ссылку в поле <b>URL</b> и нажмите <b>Save</b> (Сохранить).</li>
+                      <li>Выберите появившийся сервер, перейдите на главный экран <b>Home</b> и включите тумблер. Подтвердите добавление конфигурации в iOS. Готово!</li>
                     </ol>
-                  </div>
-                </div>
-
-                <div class="step-item">
-                  <span class="step-num">4</span>
-                  <div class="step-body">
-                    <strong>Подключитесь:</strong>
-                    <p>
-                      Выберите появившийся сервер, перейдите на главный экран <b>Home</b> и включите большой тумблер. Подтвердите добавление VPN в iOS. Готово!
-                    </p>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Вкладка 3: Android -->
+            <!-- Вкладка 3: Android (v2rayNG) -->
             <div class="tab-content" id="tab-android">
               <div class="notice-box notice-info">
-                <strong>Рекомендуемое приложение для Android:</strong> <b>v2rayNG</b> или <b>Hiddify</b>.
+                <strong>Классическое подключение для Android:</strong> приложение <b>v2rayNG</b> (работает по Универсальной ссылке).
               </div>
 
               <div class="steps-list">
                 <div class="step-item">
                   <span class="step-num">1</span>
                   <div class="step-body">
-                    <strong>Установите v2rayNG или Hiddify:</strong>
+                    <strong>Установите v2rayNG:</strong>
                     <div class="button-row">
                       <a href="https://play.google.com/store/apps/details?id=com.v2ray.ang" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
                         🤖 v2rayNG в Google Play
-                      </a>
-                      <a href="https://play.google.com/store/apps/details?id=app.hiddify.com" target="_blank" rel="noopener" class="btn btn-sm btn-secondary">
-                        Hiddify в Google Play
                       </a>
                     </div>
                   </div>
@@ -528,7 +466,7 @@
                 <div class="step-item">
                   <span class="step-num">2</span>
                   <div class="step-body">
-                    <strong>Скопируйте ссылку:</strong>
+                    <strong>Скопируйте Универсальную ссылку:</strong>
                     <button type="button" class="btn btn-sm btn-secondary copy-quick-sub-btn">
                       📋 Скопировать Универсальную ссылку
                     </button>
@@ -539,36 +477,30 @@
                   <span class="step-num">3</span>
                   <div class="step-body">
                     <strong>Добавьте подписку в v2rayNG:</strong>
-                    <p>
-                      Боковое меню (три полоски) → <b>Группы подписок</b> → <b>«+»</b> → вставьте ссылку → нажмите галочку сверху.<br>
-                      На главном экране: три точки сверху → <b>Обновить подписку</b>.
-                    </p>
-                  </div>
-                </div>
-
-                <div class="step-item">
-                  <span class="step-num">4</span>
-                  <div class="step-body">
-                    <strong>Старт:</strong>
-                    <p>Выберите любой сервер и нажмите круглую кнопку старта в правом нижнем углу.</p>
+                    <ol class="step-sublist">
+                      <li>Откройте боковое меню (три полоски) → <b>Группы подписок</b> → нажмите <b>«+»</b>.</li>
+                      <li>Вставьте ссылку в поле <b>URL подписки</b> и нажмите галочку в правом верхнем углу.</li>
+                      <li>На главном экране нажмите три точки в правом верхнем углу → <b>Обновить подписку</b>.</li>
+                      <li>Выберите сервер и нажмите круглую кнопку старта в правом нижнем углу.</li>
+                    </ol>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Вкладка 4: Windows -->
+            <!-- Вкладка 4: Windows (v2rayN) -->
             <div class="tab-content" id="tab-windows">
               <div class="notice-box notice-info">
-                <strong>Рекомендуемое приложение для Windows:</strong> <b>Hiddify</b> (самый простой интерфейс).
+                <strong>Классическое подключение для Windows:</strong> <b>v2rayN</b> (для пользователей, предпочитающих традиционный интерфейс).
               </div>
 
               <div class="steps-list">
                 <div class="step-item">
                   <span class="step-num">1</span>
                   <div class="step-body">
-                    <strong>Скачайте Hiddify:</strong>
-                    <a href="https://github.com/hiddify/hiddify-app/releases" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
-                      🪟 Скачать Hiddify для Windows (.exe)
+                    <strong>Скачайте v2rayN:</strong>
+                    <a href="https://github.com/2dust/v2rayN/releases" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
+                      🪟 v2rayN на GitHub Releases
                     </a>
                   </div>
                 </div>
@@ -586,25 +518,17 @@
                 <div class="step-item">
                   <span class="step-num">3</span>
                   <div class="step-body">
-                    <strong>Добавьте в Hiddify:</strong>
-                    <p>Откройте Hiddify → нажмите <b>«Новый профиль»</b> → <b>«Добавить из буфера обмена»</b>.</p>
-                  </div>
-                </div>
-
-                <div class="step-item">
-                  <span class="step-num">4</span>
-                  <div class="step-body">
-                    <strong>Включите TUN и Старт:</strong>
-                    <p>В настройках Hiddify включите <b>«Режим TUN»</b> и нажмите круглую кнопку подключения.</p>
+                    <strong>Добавьте подписку:</strong>
+                    <p>В меню v2rayN нажмите <b>Subscription group</b> → <b>Subscription group setting</b> → <b>Add</b> → вставьте ссылку в поле <b>Url</b> → <b>Confirm</b>. Затем в верхнем меню: <b>Subscription group</b> → <b>Update subscription without proxy</b>.</p>
                   </div>
                 </div>
               </div>
             </div>
 
-            <!-- Вкладка 5: macOS -->
+            <!-- Вкладка 5: macOS (V2Box) -->
             <div class="tab-content" id="tab-macos">
               <div class="notice-box notice-info">
-                <strong>Рекомендуемое приложение для Mac:</strong> <b>V2Box</b> (из Mac App Store) или <b>Hiddify</b>.
+                <strong>Классическое подключение для macOS:</strong> приложение <b>V2Box</b> из Mac App Store.
               </div>
 
               <div class="steps-list">
@@ -612,11 +536,9 @@
                   <span class="step-num">1</span>
                   <div class="step-body">
                     <strong>Установите V2Box:</strong>
-                    <div class="button-row">
-                      <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814065" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
-                        🍎 V2Box в Mac App Store
-                      </a>
-                    </div>
+                    <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814065" target="_blank" rel="noopener" class="btn btn-sm btn-primary">
+                      🍎 V2Box в Mac App Store
+                    </a>
                   </div>
                 </div>
 
@@ -634,15 +556,7 @@
                   <span class="step-num">3</span>
                   <div class="step-body">
                     <strong>Добавьте в V2Box:</strong>
-                    <p>Перейдите во вкладку <b>Configs</b> → <b>«+»</b> → <b>Add Subscription</b> → вставьте ссылку и сохраните.</p>
-                  </div>
-                </div>
-
-                <div class="step-item">
-                  <span class="step-num">4</span>
-                  <div class="step-body">
-                    <strong>Включите VPN:</strong>
-                    <p>Выберите сервер и включите тумблер на главном экране. Подтвердите добавление VPN в macOS.</p>
+                    <p>Перейдите во вкладку <b>Configs</b> → <b>«+»</b> → <b>Add Subscription</b> → вставьте ссылку и сохраните. Включите тумблер на главном экране.</p>
                   </div>
                 </div>
               </div>
@@ -693,7 +607,7 @@
         <button type="button" class="btn-close" id="closeQrModalBtn" aria-label="Закрыть">&times;</button>
       </div>
       <div class="modal-body text-center">
-        <p class="modal-hint" id="qrModalHint">Наведите камеру в приложении (V2Box, Hiddify, v2rayNG или Sing-box):</p>
+        <p class="modal-hint" id="qrModalHint">Наведите камеру в приложении (Hiddify, V2Box, v2rayNG или AmneziaVPN):</p>
         <div class="qr-container" id="qrCanvasBox"></div>
         <p class="qr-sub-text mono-font" id="qrTextValue"></p>
       </div>
@@ -709,11 +623,11 @@
   <!-- Подвал сайта -->
   <footer class="app-footer">
     <div class="container footer-container">
-      <p>© <span id="currentYear"></span> Приватный защищенный VPN-шлюз. Все права защищены.</p>
+      <p>© <span id="currentYear"></span> Личный кабинет пользователя. Все права защищены.</p>
     </div>
   </footer>
 
-  <script src="qr.js?v=7"></script>
-  <script src="app.js?v=7"></script>
+  <script src="qr.js?v=8"></script>
+  <script src="app.js?v=8"></script>
 </body>
 </html>

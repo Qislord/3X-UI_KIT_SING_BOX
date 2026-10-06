@@ -24,6 +24,10 @@ func ParseProxyInfo(link string) *ProxyInfo {
 		return nil
 	}
 
+	if strings.HasPrefix(strings.ToLower(link), "vpn://") {
+		return parseAmneziaVPNInfo(link)
+	}
+
 	outbound := ParseProxyLink(link)
 	if outbound != nil {
 		tag, _ := outbound["tag"].(string)
@@ -53,6 +57,54 @@ func ParseProxyInfo(link string) *ProxyInfo {
 		}
 	}
 	return nil
+}
+
+// parseAmneziaVPNInfo extracts info from vpn:// links containing AmneziaWG / WireGuard config.
+func parseAmneziaVPNInfo(link string) *ProxyInfo {
+	payload := link[len("vpn://"):]
+	frag := ""
+	if idx := strings.Index(payload, "#"); idx != -1 {
+		if decoded, err := url.PathUnescape(payload[idx+1:]); err == nil && decoded != "" {
+			frag = decoded
+		} else {
+			frag = payload[idx+1:]
+		}
+		payload = payload[:idx]
+	}
+
+	decoded, err := decodeBase64Safe(payload)
+	if err == nil && strings.Contains(decoded, "[Interface]") {
+		lowerDec := strings.ToLower(decoded)
+		hasH := strings.Contains(lowerDec, "h1") || strings.Contains(lowerDec, "h2") || strings.Contains(lowerDec, "h3") || strings.Contains(lowerDec, "h4")
+		hasJ := strings.Contains(lowerDec, "jc") || strings.Contains(lowerDec, "jmin") || strings.Contains(lowerDec, "jmax") || strings.Contains(lowerDec, "s1") || strings.Contains(lowerDec, "s2")
+
+		tag := frag
+		if tag == "" || strings.EqualFold(tag, "vpn") {
+			if hasH {
+				tag = "AmneziaWG (3.1 - защита заголовков)"
+			} else if hasJ {
+				tag = "AmneziaWG (Классика)"
+			} else {
+				tag = "AmneziaWG"
+			}
+		}
+
+		return &ProxyInfo{
+			Tag:  tag,
+			Type: "AMNEZIA",
+			Link: link,
+		}
+	}
+
+	tag := frag
+	if tag == "" || strings.EqualFold(tag, "vpn") {
+		tag = "AmneziaWG"
+	}
+	return &ProxyInfo{
+		Tag:  tag,
+		Type: "AMNEZIA",
+		Link: link,
+	}
 }
 
 // ParseProxyLink parses supported proxy links into Sing-box outbound map.

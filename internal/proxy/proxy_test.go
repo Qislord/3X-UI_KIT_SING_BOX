@@ -71,3 +71,42 @@ func TestFixTGLink(t *testing.T) {
 		t.Errorf("expected %s, got %s", expected, fixed)
 	}
 }
+
+func TestParseAmneziaVPN(t *testing.T) {
+	// Classic AWG with Jc, Jmin
+	classicConf := "[Interface]\nAddress = 10.8.1.2/32\nPrivateKey = aaaa\nJc = 3\nJmin = 50\nJmax = 100\nS1 = 15\nS2 = 20\n[Peer]\nPublicKey = bbbb\nEndpoint = 1.2.3.4:51821\n"
+	classicB64 := "W0ludGVyZmFjZV0KQWRkcmVzcyA9IDEwLjguMS4yLzMyClByaXZhdGVLZXkgPSBhYWFhCkpDID0gMwpKbWluID0gNTAKSm1heCA9IDEwMApTMSA9IDE1ClMyID0gMjAKW1BlZXJdClB1YmxpY0tleSA9IGJiYmIKRW5kcG9pbnQgPSAxLjIuMy40OjUxODIxCg=="
+	_ = classicConf
+
+	p1 := proxy.ParseProxyInfo("vpn://" + classicB64)
+	if p1 == nil {
+		t.Fatalf("expected p1 to be parsed")
+	}
+	if p1.Type != "AMNEZIA" {
+		t.Errorf("expected Type AMNEZIA, got %s", p1.Type)
+	}
+	if p1.Tag != "AmneziaWG (Классика)" {
+		t.Errorf("expected Tag 'AmneziaWG (Классика)', got %s", p1.Tag)
+	}
+
+	// AWG 3.1 with H1..H4
+	awg3ConfB64 := "W0ludGVyZmFjZV0KQWRkcmVzcyA9IDEwLjguMi4yLzMyClByaXZhdGVLZXkgPSBhYWFhCkpDID0gMwpTMSA9IDE1ClMyID0gMjAKSDEgPSAxCkgyID0gMgpIMyA9IDMKSDQgPSA0CltQZWVyXQpQdWJsaWNLZXkgPSBiYmJiCkVuZHBvaW50ID0gMS4yLjMuNDo1MTgyMgo="
+	p2 := proxy.ParseProxyInfo("vpn://" + awg3ConfB64 + "#CustomTag")
+	if p2 == nil {
+		t.Fatalf("expected p2 to be parsed")
+	}
+	if p2.Type != "AMNEZIA" {
+		t.Errorf("expected Type AMNEZIA, got %s", p2.Type)
+	}
+	if p2.Tag != "CustomTag" {
+		t.Errorf("expected Tag 'CustomTag', got %s", p2.Tag)
+	}
+
+	p3 := proxy.ParseProxyInfo("vpn://" + awg3ConfB64)
+	if p3 == nil {
+		t.Fatalf("expected p3 to be parsed")
+	}
+	if p3.Tag != "AmneziaWG (3.1 - защита заголовков)" {
+		t.Errorf("expected Tag 'AmneziaWG (3.1 - защита заголовков)', got %s", p3.Tag)
+	}
+}
