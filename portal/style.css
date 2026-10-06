@@ -45,6 +45,12 @@
   padding: 0;
 }
 
+/* Глобальное скрытие элементов с атрибутом hidden или классом hidden */
+[hidden],
+.hidden {
+  display: none !important;
+}
+
 body {
   font-family: var(--font-sans);
   background-color: var(--bg-main);
@@ -756,11 +762,21 @@ body {
   background: rgba(0, 0, 0, 0.75);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
-  display: flex;
+  display: none;
   align-items: center;
   justify-content: center;
   z-index: 100;
   padding: 20px;
+}
+
+.modal-backdrop.active,
+.modal-backdrop:not([hidden]):not(.hidden) {
+  display: flex;
+}
+
+.modal-backdrop[hidden],
+.modal-backdrop.hidden {
+  display: none !important;
 }
 
 .modal-box {
@@ -798,6 +814,12 @@ body {
   font-size: 1.6rem;
   cursor: pointer;
   line-height: 1;
+  transition: color 0.15s ease;
+  padding: 4px;
+}
+
+.btn-close:hover {
+  color: #fff;
 }
 
 .qr-container {
@@ -807,6 +829,10 @@ body {
   display: inline-block;
   margin: 16px 0;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.qr-container:empty {
+  display: none !important;
 }
 
 .qr-container svg {

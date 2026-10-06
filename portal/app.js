@@ -89,6 +89,10 @@
   }
 
   async function copyToClipboard(text, successMsg = 'Скопировано в буфер обмена!') {
+    if (!text || !String(text).trim()) {
+      showToast('Нет данных для копирования', 'error');
+      return false;
+    }
     try {
       if (navigator.clipboard && window.isSecureContext) {
         await navigator.clipboard.writeText(text);
@@ -154,12 +158,14 @@
     loginView.hidden = false;
     dashboardView.hidden = true;
     headerAuth.hidden = true;
+    closeQrModal();
   }
 
   function renderDashboard(data) {
     loginView.hidden = true;
     dashboardView.hidden = false;
     headerAuth.hidden = false;
+    closeQrModal();
 
     const user = data.user || {};
     const stats = data.stats || {};
@@ -389,33 +395,70 @@
   });
 
   // --- Модалка QR-кода и легковесный генератор SVG QR ---
-  qrBtn.addEventListener('click', () => {
-    const url = subUrlInput.value;
-    if (!url) return;
+  function openQrModal() {
+    const url = subUrlInput ? subUrlInput.value.trim() : '';
+    if (!url) {
+      showToast('Сначала войдите в систему', 'error');
+      return;
+    }
 
     qrCanvasBox.innerHTML = '';
     qrTextValue.textContent = url;
 
     // Генерируем QR-код через SVG
     renderQrCode(qrCanvasBox, url);
-    qrModal.hidden = false;
+
+    if (qrModal) {
+      qrModal.removeAttribute('hidden');
+      qrModal.classList.remove('hidden');
+      qrModal.classList.add('active');
+      qrModal.style.display = 'flex';
+    }
+  }
+
+  function closeQrModal() {
+    if (!qrModal) return;
+    qrModal.setAttribute('hidden', '');
+    qrModal.classList.add('hidden');
+    qrModal.classList.remove('active');
+    qrModal.style.display = 'none';
+  }
+
+  if (qrBtn) qrBtn.addEventListener('click', openQrModal);
+
+  if (closeQrModalBtn) {
+    closeQrModalBtn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      closeQrModal();
+    });
+  }
+
+  if (qrModal) {
+    qrModal.addEventListener('click', (e) => {
+      if (e.target === qrModal) closeQrModal();
+    });
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && qrModal && !qrModal.hasAttribute('hidden')) {
+      closeQrModal();
+    }
   });
 
-  closeQrModalBtn.addEventListener('click', () => {
-    qrModal.hidden = true;
-  });
-
-  qrModal.addEventListener('click', (e) => {
-    if (e.target === qrModal) qrModal.hidden = true;
-  });
-
-  copyFromQrBtn.addEventListener('click', () => {
-    copyToClipboard(subUrlInput.value, 'Ссылка скопирована!');
-    qrModal.hidden = true;
-  });
+  if (copyFromQrBtn) {
+    copyFromQrBtn.addEventListener('click', () => {
+      const url = subUrlInput ? subUrlInput.value.trim() : '';
+      if (url) {
+        copyToClipboard(url, 'Ссылка скопирована!');
+      }
+      closeQrModal();
+    });
+  }
 
   // --- Локальный генератор QR-кода на чистом JS (100% offline & zero network) ---
   function renderQrCode(container, text) {
+    if (!container || !text) return;
     if (window.QRGenerator && typeof window.QRGenerator.generateSVG === 'function') {
       container.innerHTML = window.QRGenerator.generateSVG(text, 220);
     } else {
@@ -424,6 +467,7 @@
   }
 
   // --- Первичная инициализация ---
+  closeQrModal();
   checkAuth();
 
 })();
