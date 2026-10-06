@@ -828,6 +828,58 @@ PY
   echo
 }
 
+cmd_restore() {
+  local archive="${1:-}"
+  [[ -z $archive ]] && die "Укажите путь к архиву бэкапа: kit restore /путь/к/kit-backup-XXXX.tar.gz"
+  [[ -f $archive ]] || die "Файл бэкапа не найден: $archive"
+
+  say "Восстановление данных из ${B}$archive${N}..."
+
+  local tmp
+  tmp=$(mktemp -d)
+  # shellcheck disable=SC2064
+  trap "rm -rf -- '$tmp'" EXIT
+
+  tar -xzf "$archive" -C "$tmp" || die "Не удалось распаковать архив бэкапа."
+
+  # Останавливаем службы
+  say "Останавливаю службы панели и портала..."
+  systemctl stop x-ui kit-portal 2>/dev/null || true
+
+  # Восстанавливаем базу 3X-UI
+  if [[ -f "$tmp/etc/x-ui/x-ui.db" ]]; then
+    install -d -m 700 /etc/x-ui
+    cp -f "$tmp/etc/x-ui/x-ui.db" /etc/x-ui/x-ui.db
+    chmod 600 /etc/x-ui/x-ui.db
+    say "База панели 3X-UI (/etc/x-ui/x-ui.db) успешно восстановлена."
+  fi
+
+  # Восстанавливаем базу личного кабинета (пользователи, пароли, токены)
+  if [[ -f "$tmp/etc/kit/portal.db" ]]; then
+    install -d -m 700 /etc/kit
+    cp -f "$tmp/etc/kit/portal.db" /etc/kit/portal.db
+    chmod 600 /etc/kit/portal.db
+    say "База личного кабинета (/etc/kit/portal.db) успешно восстановлена."
+  fi
+
+  # Восстанавливаем файлы конфигурации и памятку
+  for f in etc/kit/kit.env etc/kit-sub/config.json root/3x-ui.txt; do
+    if [[ -f "$tmp/$f" ]]; then
+      cp -f "$tmp/$f" "/$f" 2>/dev/null || true
+    fi
+  done
+
+  # Запускаем службы
+  say "Запускаю службы..."
+  systemctl start x-ui kit-portal 2>/dev/null || true
+  systemctl reload nginx 2>/dev/null || true
+
+  echo
+  say "${G}${B}Восстановление успешно завершено!${N}"
+  echo "Все пользователи, пароли личного кабинета, токены и подключения сохранены."
+  echo
+}
+
 usage() {
   cat <<EOF
 ${B}kit${N} $KIT_VERSION – управление сервером 3X-UI KIT
@@ -846,6 +898,7 @@ ${B}kit${N} $KIT_VERSION – управление сервером 3X-UI KIT
   kit update            обновить kit и подписку kit-sub сейчас (пользователи и ссылки не меняются)
   kit update --manual   выключить автообновление (--auto – включить обратно)
   kit backup            резервная копия сервера (подключения, ключи, пользователи)
+  kit restore <файл>    восстановить сервер из резервной копии (базы x-ui и портала)
   kit check             проверить сервер: службы, сертификат, подписка, сайт маскировки, права
   kit fix [--dry-run]   исправить безопасное: перезапустить службы, права, автообновление, сертификат
   kit version           версия kit, панели и ядра
@@ -866,6 +919,7 @@ case "$cmd_key" in
   "user del") shift 2; cmd_del "$@" ;;
   "update "*) shift; cmd_update "$@" ;;
   "backup "*) cmd_backup ;;
+  "restore "*) shift; cmd_restore "$@" ;;
   "check "*) cmd_check ;;
   "fix "*) shift; cmd_fix "$@" ;;
   "version "*|"--version "*|"-v "*) cmd_version ;;
