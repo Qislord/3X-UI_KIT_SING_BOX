@@ -983,16 +983,56 @@ class PortalHandler(http.server.BaseHTTPRequestHandler):
                 return self.send_json(401, {"error": "Требуется авторизация"})
 
             stats = get_3xui_client_info(user["username"])
+            raw_sub = ""
+            try:
+                raw_sub = fetch_raw_subscription(user["sub_id"])
+            except Exception:
+                pass
+
+            sub_path = "/" + ENV.get("SUB_PATH", "sub").strip("/") + "/"
+            universal_sub_url = f"https://{DOMAIN}{sub_path}{user['sub_id']}"
+            singbox_sub_url = f"https://{DOMAIN}/sub/singbox?token={user['sub_token']}"
+
+            # Формируем список индивидуальных ссылок
+            raw_lines = [line.strip() for line in raw_sub.splitlines() if line.strip()]
+            tg_link = ""
+            parsed_proxies = []
+            for line in raw_lines:
+                if line.startswith("tg://"):
+                    tg_link = line
+                    continue
+                p = parse_proxy_link(line)
+                if p:
+                    parsed_proxies.append({
+                        "tag": p.get("tag", "Прокси"),
+                        "type": p.get("type", "vless").upper(),
+                        "link": line
+                    })
+                elif "://" in line:
+                    scheme = line.split("://")[0].upper()
+                    frag = line.split("#")[1] if "#" in line else scheme
+                    parsed_proxies.append({
+                        "tag": urllib.parse.unquote(frag),
+                        "type": scheme,
+                        "link": line
+                    })
+
             return self.send_json(200, {
                 "success": True,
                 "user": {
                     "username": user["username"],
+                    "sub_id": user["sub_id"],
                     "sub_token": user["sub_token"],
                     "created_at": user["created_at"],
                 },
                 "stats": stats,
                 "domain": DOMAIN,
-                "sub_url": f"https://{DOMAIN}/sub/singbox?token={user['sub_token']}"
+                "universal_sub_url": universal_sub_url,
+                "singbox_sub_url": singbox_sub_url,
+                "sub_url": universal_sub_url,  # Основная универсальная ссылка по умолчанию
+                "raw_subscription": "\n".join(raw_lines),
+                "tg_proxy_url": tg_link,
+                "proxies": parsed_proxies,
             })
 
         # 3. Статические файлы фронтенда
