@@ -112,9 +112,19 @@ sni_ok() {
 # Домен должен смотреть на этот сервер: иначе Let's Encrypt не выдаст сертификат,
 # а маскировка под чужой адрес ничего не даст.
 domain_points_here() { # домен
-  local me=$HOST ips
+  local me=$HOST ips pub_ips
   [[ $me =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] || me=$(public_ip)
   ips=$(getent ahostsv4 "$1" 2>/dev/null | awk '{print $1}' | sort -u)
+  # Также проверяем через DoH (1.1.1.1 и 8.8.8.8) на случай кэширования старого IP локальным DNS резолвером
+  pub_ips=$(curl -4 -fsS -m 5 "https://1.1.1.1/dns-query?name=$1&type=A" -H "accept: application/dns-json" 2>/dev/null \
+    | jq -r '.Answer[]? | select(.type == 1) | .data' 2>/dev/null | sort -u || true)
+  if [[ -z $pub_ips ]]; then
+    pub_ips=$(curl -4 -fsS -m 5 "https://dns.google/resolve?name=$1&type=A" 2>/dev/null \
+      | jq -r '.Answer[]? | select(.type == 1) | .data' 2>/dev/null | sort -u || true)
+  fi
+  if [[ -n $pub_ips ]]; then
+    ips=$(printf '%s\n%s\n' "$ips" "$pub_ips" | grep -E '^[0-9.]+$' | sort -u)
+  fi
   if [[ -z $ips ]]; then
     warn "У домена $1 нет A-записи. Добавьте её у регистратора: тип A, значение $me."
   elif ! grep -qx "$me" <<<"$ips"; then
@@ -133,21 +143,17 @@ ask_tty() { # приглашение; ответ – в REPLY; не 0, если 
 # Вопрос пользователю: чужой сайт по умолчанию или свой домен. Без ответа – стандартный.
 choose_masking() {
   echo
-  echo "${B}Под какой сайт маскировать сервер?${N}"
-  echo "Чтобы сервер не выделялся, он притворяется обычным сайтом. Имя этого сайта (SNI) видно"
-  echo "всем по пути, поэтому от выбора зависит, насколько трудно вас заметить."
+  echo "${B}Как настроить сервер?${N}"
+  echo "Панель управления, личный кабинет и ссылки могут работать по IP сервера или по вашему домену."
   echo
-  echo "  ${B}1)${N} Стандартный сайт ${D}(рекомендуем, если не уверены)${N}"
-  echo "     Сервер притворяется популярным сайтом (по умолчанию ${SNI_CANDIDATES[0]}). Ничего готовить"
-  echo "     не нужно, работает сразу. Минус: IP вашего сервера не принадлежит этому сайту,"
-  echo "     и при желании цензор может это заметить."
+  echo "  ${B}1)${N} Стандартный режим по IP ${D}(рекомендуем, если нет домена)${N}"
+  echo "     Работает сразу. Сертификат Let's Encrypt на IP (или самоподписанный)."
+  echo "     REALITY маскируется под ${SNI_CANDIDATES[0]}."
   echo
-  echo "  ${B}2)${N} Свой домен ${D}(надёжнее)${N}"
-  echo "     Сервер притворяется вашим собственным сайтом: на нём настоящая страница и сертификат"
-  echo "     Let's Encrypt. Нужно заранее: свой домен, его A-запись на IP этого сервера и свободный"
-  echo "     порт 80. Сертификат установщик получит сам."
-  echo "     ${D}Честно: сертификат домена попадает в публичные журналы сертификатов, поэтому связь${N}"
-  echo "     ${D}«домен – сервер» не скрыта. «Надёжнее» не значит «невидимо».${N}"
+  echo "  ${B}2)${N} Свой домен ${D}(рекомендуется для чистого HTTPS)${N}"
+  echo "     Панель, личный кабинет и подписки открываются по вашему домену с полноценным"
+  echo "     сертификатом Let's Encrypt без предупреждений браузера. REALITY маскируется под надёжный CDN."
+  echo "     Нужно заранее: A-запись домена на IP этого сервера."
   echo
   local d="" prev=""
   ask_tty "Ваш выбор [1]: " || return 0
@@ -171,18 +177,25 @@ choose_masking() {
   done
 }
 
-# Сертификат для домена через acme.sh, который уже поставил установщик 3X-UI.
-# Продлевает его тот же cron, а после продления nginx перечитывает сертификат.
+# Сертификат для домена через acme.sh.
+# Продлевает его cron, а после продления nginx и x-ui перечитывают сертификат.
 issue_domain_cert() {
   local acme=/root/.acme.sh/acme.sh rc=0 log=/var/log/kit-domain-cert.log
+  [[ -x $acme ]] || acme=$(command -v acme.sh 2>/dev/null || true)
+  [[ -x $acme ]] || acme=~/.acme.sh/acme.sh
   if [[ -s $DOMAIN_CERT_DIR/fullchain.pem && -s $DOMAIN_CERT_DIR/privkey.pem ]] \
     && openssl x509 -in "$DOMAIN_CERT_DIR/fullchain.pem" -noout -checkhost "$DOMAIN" 2>/dev/null | grep -q 'does match' \
     && openssl x509 -in "$DOMAIN_CERT_DIR/fullchain.pem" -noout -issuer 2>/dev/null | grep -q "Let's Encrypt" \
     && openssl x509 -in "$DOMAIN_CERT_DIR/fullchain.pem" -noout -checkend 864000 >/dev/null 2>&1; then
-    say "Сертификат для ${B}$DOMAIN${N} уже есть"
+    say "Сертификат для ${B}$DOMAIN${N} уже есть и действителен"
     return 0
   fi
-  [[ -x $acme ]] || { warn "Не нашёл acme.sh, которым установщик 3X-UI получает сертификаты: не могу выпустить сертификат для $DOMAIN."; return 1; }
+  if [[ ! -x $acme ]]; then
+    say "Ставлю acme.sh для получения сертификата Let's Encrypt"
+    curl -fsSL https://get.acme.sh | sh -s email="admin@$DOMAIN" >/dev/null 2>&1 || true
+    acme=/root/.acme.sh/acme.sh
+  fi
+  [[ -x $acme ]] || { warn "Не нашёл acme.sh: не могу выпустить сертификат для $DOMAIN."; return 1; }
   if port_busy 80 tcp; then
     if systemctl is-active -q nginx 2>/dev/null; then
       systemctl stop nginx >/dev/null 2>&1 || true
@@ -203,14 +216,15 @@ issue_domain_cert() {
   # Каталог и ключ – только для root (nginx читает их от root).
   install -d -m 700 "$DOMAIN_CERT_DIR"
   (umask 077; "$acme" --install-cert -d "$DOMAIN" --ecc --fullchain-file "$DOMAIN_CERT_DIR/fullchain.pem" \
-    --key-file "$DOMAIN_CERT_DIR/privkey.pem" --reloadcmd "systemctl reload nginx >/dev/null 2>&1 || true" >>"$log" 2>&1) \
+    --key-file "$DOMAIN_CERT_DIR/privkey.pem" --reloadcmd "systemctl reload nginx >/dev/null 2>&1 || true; systemctl restart x-ui >/dev/null 2>&1 || true" >>"$log" 2>&1) \
     || { warn "Не удалось сохранить сертификат для $DOMAIN. Лог: $log"; return 1; }
   chmod 644 "$DOMAIN_CERT_DIR/fullchain.pem"
   chmod 600 "$DOMAIN_CERT_DIR/privkey.pem"
+  say "Сертификат для ${B}$DOMAIN${N} успешно установлен"
   return 0
 }
 
-# Let's Encrypt не выдал сертификат на IP, а режим со своим доменом без него не работает: предлагаем
+# Let's Encrypt не выдал сертификат на IP, а режим без своего домена: предлагаем
 # самоподписанный сертификат на IP. Ссылки на подключения продолжат работать (отпечаток уходит в
 # ссылки), а подписка в приложениях может не открыться: им такой сертификат не нравится.
 ip_cert_self_signed_fallback() {
@@ -245,9 +259,9 @@ ip_cert_self_signed_fallback() {
   return 0
 }
 
-# Куда REALITY отправляет чужих гостей: для своего домена – на nginx этого сервера.
+# Куда REALITY отправляет чужих гостей: на реальный сайт маскировки
 reality_target() { # сайт
-  if [[ -n $DOMAIN && $1 == "$DOMAIN" ]]; then echo "127.0.0.1:${INNER[selfweb]}"; else echo "$1:443"; fi
+  echo "$1:443"
 }
 
 # ---------- API панели ----------
@@ -373,7 +387,6 @@ main() {
   done
   [[ -z $SNI || $SNI =~ $re_host ]] || die "--sni: нужно имя сайта, например dl.google.com"
   [[ -z $DOMAIN || $DOMAIN =~ $re_host ]] || die "--domain: нужно имя вашего домена, например vpn.example.com"
-  [[ -z $DOMAIN || -z $SNI ]] || die "--sni и --domain вместе не нужны: выберите либо чужой сайт (--sni), либо свой домен (--domain)."
   [[ -z $DOMAIN || $multi == no ]] || die "Свой домен работает только в режиме «всё на 443» – уберите --multi-port."
   [[ -z $HOST || $HOST =~ $re_host || $HOST =~ ^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$ ]] || die "--host: нужен IP (например 1.2.3.4) или домен"
   [[ $NAME =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || die "Имя: латиница, цифры, _ . - (до 32 символов)."
@@ -443,14 +456,17 @@ main() {
 
   # Маскировка: из флагов, по вопросу пользователю или стандартная.
   if [[ -n $DOMAIN ]]; then
-    [[ $PANEL_SSL == ip ]] || die "Свой домен работает с сертификатом панели Let's Encrypt на IP: освободите порт 80 и не указывайте --cert, --key и --panel-ssl none (сертификат для домена установщик получит сам)."
-    domain_points_here "$DOMAIN" || die "Исправьте A-запись домена и запустите скрипт снова (DNS обновляется от нескольких минут до нескольких часов)."
-  elif [[ -z $SNI && $yes == no && $PANEL_SSL == ip && $multi == no && ! -f $XUI_ENV && -t 1 ]] && { : </dev/tty; } 2>/dev/null; then
+    domain_points_here "$DOMAIN" || {
+      if [[ $force == yes ]]; then
+        warn "A-запись домена $DOMAIN может быть ещё не обновилась, но продолжаю из-за --force"
+      else
+        die "Исправьте A-запись домена $DOMAIN (она должна указывать на $HOST) и запустите скрипт снова."
+      fi
+    }
+  elif [[ -z $SNI && $yes == no && $multi == no && ! -f $XUI_ENV && -t 1 ]] && { : </dev/tty; } 2>/dev/null; then
     choose_masking
   fi
-  if [[ -n $DOMAIN ]]; then
-    SNI=$DOMAIN
-  elif [[ -z $SNI ]]; then
+  if [[ -z $SNI || $SNI == "$DOMAIN" ]]; then
     say "Выбираю сайт для маскировки REALITY"
     for s in "${SNI_CANDIDATES[@]}"; do
       if sni_ok "$s"; then SNI=$s; break; fi
@@ -459,7 +475,7 @@ main() {
   elif ! sni_ok "$SNI"; then
     die "$SNI не отвечает по TLS 1.3 + HTTP/2 – REALITY с ним работать не будет. Выберите другой сайт."
   fi
-  say "Маскировка: ${B}$SNI${N}${DOMAIN:+ (свой домен)}"
+  say "Маскировка REALITY: ${B}$SNI${N}${DOMAIN:+ (панель и веб-интерфейс на домене $DOMAIN)}"
   # Для режима «всё на 443» XHTTP и MTProto нужны свои сайты: nginx различает их по SNI.
   for s in "${SNI_CANDIDATES[@]}"; do
     [[ $s == "$SNI" ]] && continue
@@ -484,29 +500,30 @@ main() {
   # Данные для входа – из файла, который пишет сам установщик.
   connect_panel
 
-  if [[ $PANEL_SSL == custom ]]; then
+  # Выпуск и подключение сертификата к панели
+  if [[ -n $DOMAIN ]]; then
+    issue_domain_cert || die "Без сертификата для $DOMAIN продолжать нельзя. Исправьте причину и запустите скрипт снова."
+    OPEN+=("80/tcp")
+    TRUSTED=yes
+    say "Подключаю сертификат домена $DOMAIN к панели 3X-UI"
+    /usr/local/x-ui/x-ui cert -webCert "$DOMAIN_CERT_DIR/fullchain.pem" -webCertKey "$DOMAIN_CERT_DIR/privkey.pem" >/dev/null 2>&1
+    systemctl restart x-ui
+    API="https://127.0.0.1:$XUI_PANEL_PORT/$XUI_WEB_BASE_PATH/panel/api"
+    wait_panel
+  elif [[ $PANEL_SSL == custom ]]; then
     say "Подключаю ваш сертификат к панели"
     /usr/local/x-ui/x-ui cert -webCert /root/cert/custom/fullchain.pem -webCertKey /root/cert/custom/privkey.pem >/dev/null 2>&1
     systemctl restart x-ui
     API="https://127.0.0.1:$XUI_PANEL_PORT/$XUI_WEB_BASE_PATH/panel/api"
     wait_panel
-  fi
-
-  # Установщик 3X-UI мог не получить сертификат на IP (порт 80 закрыт у хостера, лимит
-  # Let's Encrypt, сбой). Без него панель осталась бы без TLS, а nginx проксирует её по https:
-  # получился бы сервер, который говорит «Готово», а панель не открывается.
-  if [[ $PANEL_SSL == ip && ! -s /root/cert/ip/fullchain.pem ]]; then
-    if [[ -n $DOMAIN ]]; then
-      ip_cert_self_signed_fallback || die "Остановил установку по вашему выбору. Запустите скрипт снова без --domain (панель будет доступна через SSH-туннель) или позже, когда сертификат на IP снова можно будет получить."
-    else
-      warn "Let's Encrypt не выдал сертификат на IP $HOST (порт 80 закрыт у хостера, лимит выпусков или сбой). Ставлю без него: панель будет доступна только через SSH-туннель."
-      PANEL_SSL=none
-      TRUSTED=no
-    fi
+  elif [[ $PANEL_SSL == ip && ! -s /root/cert/ip/fullchain.pem ]]; then
+    warn "Let's Encrypt не выдал сертификат на IP $HOST (порт 80 закрыт у хостера, лимит выпусков или сбой). Ставлю без него: панель будет доступна только через SSH-туннель."
+    PANEL_SSL=none
+    TRUSTED=no
   fi
 
   # Без сертификата панель и подписки не должны торчать наружу по HTTP.
-  if [[ $PANEL_SSL == none ]]; then
+  if [[ -z $DOMAIN && $PANEL_SSL == none ]]; then
     say "Панель без сертификата – открываю её только для SSH-туннеля (127.0.0.1)"
     local all
     all=$(api POST setting/all '{}')
@@ -532,11 +549,6 @@ main() {
     else
       SINGLE=yes
     fi
-  fi
-  if [[ -n $DOMAIN ]]; then
-    [[ $SINGLE == yes ]] || die "Свой домен работает только в режиме «всё на 443», а эта установка уже работает с отдельными портами."
-    issue_domain_cert || die "Без сертификата для $DOMAIN продолжать нельзя. Исправьте причину и запустите скрипт снова."
-    OPEN+=("80/tcp")
   fi
   local p
   for p in "${PROTOS[@]}"; do "proto_$p"; done
@@ -760,9 +772,14 @@ setup_ufw() {
 
 setup_tls_cert() {
   PIN=""
-  if [[ $PANEL_SSL == custom ]]; then
+  if [[ -n $DOMAIN && -s $DOMAIN_CERT_DIR/fullchain.pem && -s $DOMAIN_CERT_DIR/privkey.pem ]]; then
+    CERT=$DOMAIN_CERT_DIR/fullchain.pem; KEY=$DOMAIN_CERT_DIR/privkey.pem
+    TRUSTED=yes
+    say "Использую сертификат Let's Encrypt для домена ${B}$DOMAIN${N}"
+  elif [[ $PANEL_SSL == custom && -s /root/cert/custom/fullchain.pem ]]; then
     CERT=/root/cert/custom/fullchain.pem; KEY=/root/cert/custom/privkey.pem
-  elif [[ $PANEL_SSL == ip && -s /root/cert/ip/fullchain.pem ]]; then
+    TRUSTED=yes
+  elif [[ -s /root/cert/ip/fullchain.pem && -s /root/cert/ip/privkey.pem ]]; then
     CERT=/root/cert/ip/fullchain.pem; KEY=/root/cert/ip/privkey.pem
     # Самоподписанный сертификат на IP: отпечаток уходит в ссылки, чтобы клиенты доверяли именно ему.
     if [[ $SELF_IP_CERT == yes ]]; then
@@ -774,10 +791,10 @@ setup_tls_cert() {
     CERT=/root/cert/self/fullchain.pem; KEY=/root/cert/self/privkey.pem
     if [[ ! -s $CERT ]]; then
       mkdir -p /root/cert/self
-      local san="DNS:$HOST"
+      local san="DNS:${DOMAIN:-$HOST}"
       [[ $HOST =~ ^[0-9.]+$ ]] && san="IP:$HOST"
       openssl req -x509 -nodes -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -keyout "$KEY" -out "$CERT" \
-        -subj "/CN=$HOST" -addext "subjectAltName=$san" -days 3650 2>/dev/null
+        -subj "/CN=${DOMAIN:-$HOST}" -addext "subjectAltName=$san" -days 3650 2>/dev/null
       chmod 600 "$KEY"
     fi
     PIN=$(openssl x509 -in "$CERT" -noout -fingerprint -sha256 | cut -d= -f2 | tr -d ':' | tr 'A-F' 'a-f')
@@ -785,7 +802,8 @@ setup_tls_cert() {
 }
 
 tls_json() { # alpn(JSON-массив)
-  jq -nc --arg sni "$HOST" --arg c "$CERT" --arg k "$KEY" --arg pin "$PIN" --argjson alpn "$1" '{
+  local sni=${DOMAIN:-$HOST}
+  jq -nc --arg sni "$sni" --arg c "$CERT" --arg k "$KEY" --arg pin "$PIN" --argjson alpn "$1" '{
     serverName: $sni, alpn: $alpn, certificates: [{certificateFile: $c, keyFile: $k}],
     settings: ({fingerprint: "chrome"} + (if $pin != "" then {pinnedPeerCertSha256: [$pin]} else {} end))}'
 }
@@ -808,8 +826,30 @@ rnd() { shuf -i "$1-$2" -n 1; }
 add_inbound() {
   local remark=$1 port=$2 net=$3 protocol=$4 settings=$5 stream=$6 body listen=""
   [[ $net == inner ]] && listen=127.0.0.1
-  if jq -e --arg r "$remark" 'any(.[]; .remark == $r)' <<<"$EXISTING" >/dev/null; then
-    CREATED+=("$remark"); open_port "$port" "$net"; return
+  local existing_inbound
+  existing_inbound=$(jq -c --arg r "$remark" '.[] | select(.remark == $r)' <<<"$EXISTING" 2>/dev/null | head -n 1)
+  if [[ -n $existing_inbound ]]; then
+    if [[ $force == yes ]]; then
+      local in_id
+      in_id=$(jq -r '.id' <<<"$existing_inbound")
+      local existing_clients
+      existing_clients=$(jq -c '(.settings | if type == "string" then fromjson else . end).clients // []' <<<"$existing_inbound")
+      settings=$(jq -c --argjson cl "$existing_clients" 'if has("clients") then .clients = $cl else . end' <<<"$settings")
+      body=$(jq -nc --arg rm "$remark" --argjson port "$port" --arg p "$protocol" --arg s "$settings" --arg st "$stream" --arg l "$listen" '{
+        remark: $rm, enable: true, listen: $l, port: $port, protocol: $p, settings: $s, streamSettings: $st,
+        sniffing: "{\"enabled\":true,\"destOverride\":[\"http\",\"tls\",\"quic\"],\"metadataOnly\":false,\"routeOnly\":false}",
+        expiryTime: 0, total: 0}')
+      local out
+      out=$(curl -sSk -m 20 -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' -X POST -d "$body" "$API/inbounds/update/$in_id")
+      if [[ $(jq -r '.success' <<<"$out" 2>/dev/null) == true ]]; then
+        say "Обновлено подключение $remark"
+        CREATED+=("$remark"); open_port "$port" "$net"; return
+      else
+        curl -sSk -m 20 -H "Authorization: Bearer $TOKEN" -X POST "$API/inbounds/del/$in_id" >/dev/null 2>&1 || true
+      fi
+    else
+      CREATED+=("$remark"); open_port "$port" "$net"; return
+    fi
   fi
   # Клиентов в подключение не кладём: пользователь добавляется потом сразу во все подключения.
   settings=$(jq -c 'if has("clients") then .clients = [] else . end' <<<"$settings")
@@ -846,9 +886,14 @@ open_port() { # port net
 # External Proxy 3X-UI: ссылки ведут на HOST:443, хотя подключение слушает localhost.
 # SNI – только для TLS через nginx: у REALITY своё имя сайта маскировки, его не трогаем.
 ext_proxy() { # forceTls(same|tls) alpn(JSON)
+  local h=${DOMAIN:-$HOST}
   local sni=""
-  [[ $HOST =~ ^[0-9.]+$ ]] || sni=$HOST
-  jq -nc --arg f "$1" --arg h "$HOST" --arg sni "$sni" --argjson alpn "${2:-null}" '[{forceTls: $f, dest: $h, port: 443, remark: ""}
+  if [[ -n $DOMAIN ]]; then
+    sni=$DOMAIN
+  elif [[ ! $HOST =~ ^[0-9.]+$ ]]; then
+    sni=$HOST
+  fi
+  jq -nc --arg f "$1" --arg h "$h" --arg sni "$sni" --argjson alpn "${2:-null}" '[{forceTls: $f, dest: $h, port: 443, remark: ""}
     + (if $f == "tls" then {fingerprint: "chrome", alpn: $alpn} + (if $sni != "" then {sni: $sni} else {} end) else {} end)]'
 }
 
@@ -1180,19 +1225,20 @@ setup_nginx() {
   [[ -f /var/www/kit/index.html ]] || stub_site >/var/www/kit/index.html
 
   # Маршруты – из текущих подключений панели: сайты REALITY, пути WebSocket, сервисы gRPC.
-  local list reality_sni xhttp_sni mt_sni steal_domain locs="" self_locs="" kind path port
+  local list reality_sni xhttp_sni mt_sni locs="" kind path port
   list=$(api GET inbounds/list)
-  # Свой домен: REALITY отдаёт чужим гостям сайт с этого же сервера (nginx на внутреннем порту).
-  steal_domain=$(jq -r --arg t "127.0.0.1:${INNER[selfweb]}" '.[] | select(.remark == "REALITY" and .listen == "127.0.0.1")
-    | (.streamSettings | if type == "string" then fromjson else . end).realitySettings | select(.target == $t) | .serverNames[0]' <<<"$list")
   reality_sni=$(jq -r '.[] | select(.remark == "REALITY" and .listen == "127.0.0.1") | (.streamSettings | if type == "string" then fromjson else . end).realitySettings.serverNames[0]' <<<"$list")
   xhttp_sni=$(jq -r '.[] | select(.remark == "XHTTP" and .listen == "127.0.0.1") | (.streamSettings | if type == "string" then fromjson else . end).realitySettings.serverNames[0]' <<<"$list")
   mt_sni=$(jq -r '.[] | select(.protocol == "mtproto" and .listen == "127.0.0.1") | (.settings | if type == "string" then fromjson else . end).fakeTlsDomain' <<<"$list")
-  # Домен и сертификат проверяем до записи конфигов: nginx не должен остаться с маршрутом в никуда.
-  if [[ -n $steal_domain ]]; then
-    [[ $steal_domain =~ ^[A-Za-z0-9.-]+$ ]] || die "В подключении REALITY странное имя домена – не трогаю nginx."
-    [[ -s $DOMAIN_CERT_DIR/fullchain.pem && -s $DOMAIN_CERT_DIR/privkey.pem ]] || die "Нет сертификата для $steal_domain ($DOMAIN_CERT_DIR) – не трогаю nginx."
+
+  # Домен сервера никогда не должен попадать в stream map для REALITY, иначе браузеры не откроют сайт
+  if [[ -n $DOMAIN && $reality_sni == "$DOMAIN" ]]; then
+    reality_sni=""
   fi
+  if [[ -n $DOMAIN && $xhttp_sni == "$DOMAIN" ]]; then
+    xhttp_sni=""
+  fi
+
   # Всё из базы панели попадает в конфиг nginx, поэтому чужая база (например, из копии)
   # не должна протащить туда лишние директивы: имена и пути проверяем строго.
   local n
@@ -1213,30 +1259,11 @@ setup_nginx() {
         proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
         proxy_read_timeout 1h;
     }"
-      self_locs+="
-    location = $path {
-        proxy_pass http://127.0.0.1:$port;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection \"upgrade\";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 1h;
-    }"
     else
       locs+="
     location /$path/ {
         grpc_pass grpc://127.0.0.1:$port;
         grpc_set_header X-Real-IP \$proxy_protocol_addr;
-        grpc_read_timeout 1h;
-        grpc_send_timeout 1h;
-        client_max_body_size 0;
-    }"
-      self_locs+="
-    location /$path/ {
-        grpc_pass grpc://127.0.0.1:$port;
-        grpc_set_header X-Real-IP \$remote_addr;
         grpc_read_timeout 1h;
         grpc_send_timeout 1h;
         client_max_body_size 0;
@@ -1253,6 +1280,19 @@ setup_nginx() {
   if [[ -x /usr/local/bin/kit-portal ]]; then
     sub_target="${INNER[portal]}"
   fi
+
+  local ngx_listen_h2="" ngx_h2_directive="http2 on;" ngx_v
+  ngx_v=$(nginx -v 2>&1 | grep -oE '[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+  if [[ -n $ngx_v ]]; then
+    local maj min
+    maj=$(cut -d. -f1 <<<"$ngx_v")
+    min=$(cut -d. -f2 <<<"$ngx_v")
+    if (( maj < 1 || (maj == 1 && min < 25) )); then
+      ngx_listen_h2="http2"
+      ngx_h2_directive=""
+    fi
+  fi
+
   {
     echo "# Сгенерировано 3x-ui.sh (3X-UI KIT) – перезаписывается при повторном запуске."
     echo "stream {"
@@ -1270,8 +1310,8 @@ setup_nginx() {
       echo "        proxy_timeout 1h;"
       echo "    }"
       echo "    map \$ssl_preread_server_name \$kit_pp_upstream {"
-      [[ -n $reality_sni ]] && echo "        $reality_sni 127.0.0.1:${INNER[reality]};"
-      [[ -n $xhttp_sni && $xhttp_sni != "$reality_sni" ]] && echo "        $xhttp_sni 127.0.0.1:${INNER[xhttp]};"
+      [[ -n $reality_sni && $reality_sni != "$DOMAIN" ]] && echo "        $reality_sni 127.0.0.1:${INNER[reality]};"
+      [[ -n $xhttp_sni && $xhttp_sni != "$reality_sni" && $xhttp_sni != "$DOMAIN" ]] && echo "        $xhttp_sni 127.0.0.1:${INNER[xhttp]};"
       echo "        default 127.0.0.1:${INNER[web]};"
       echo "    }"
       echo "    server {"
@@ -1284,8 +1324,8 @@ setup_nginx() {
       echo "    }"
     else
       echo "    map \$ssl_preread_server_name \$kit_upstream {"
-      [[ -n $reality_sni ]] && echo "        $reality_sni 127.0.0.1:${INNER[reality]};"
-      [[ -n $xhttp_sni && $xhttp_sni != "$reality_sni" ]] && echo "        $xhttp_sni 127.0.0.1:${INNER[xhttp]};"
+      [[ -n $reality_sni && $reality_sni != "$DOMAIN" ]] && echo "        $reality_sni 127.0.0.1:${INNER[reality]};"
+      [[ -n $xhttp_sni && $xhttp_sni != "$reality_sni" && $xhttp_sni != "$DOMAIN" ]] && echo "        $xhttp_sni 127.0.0.1:${INNER[xhttp]};"
       echo "        default 127.0.0.1:${INNER[web]};"
       echo "    }"
       echo "    server {"
@@ -1300,10 +1340,12 @@ setup_nginx() {
     fi
     echo "}"
   } >/etc/nginx/kit-stream.conf
+
   cat >/etc/nginx/conf.d/kit.conf <<NGX
 # Сгенерировано 3x-ui.sh (3X-UI KIT) – перезаписывается при повторном запуске.
 server {
-    listen 127.0.0.1:${INNER[web]} ssl http2 proxy_protocol;
+    listen 127.0.0.1:${INNER[web]} ssl $ngx_listen_h2 proxy_protocol;
+    $ngx_h2_directive
     server_name _;
     ssl_certificate $CERT;
     ssl_certificate_key $KEY;
@@ -1356,30 +1398,32 @@ $locs
     }
 }
 NGX
-  if [[ -n $steal_domain ]]; then
+
+  if [[ -n $DOMAIN && -s /root/cert/ip/fullchain.pem && -s /root/cert/ip/privkey.pem ]]; then
     cat >>/etc/nginx/conf.d/kit.conf <<NGX
 
-# Свой домен (self-steal): сюда REALITY отправляет всех, кто не подключается как клиент.
-# Здесь работают личный кабинет пользователя kit-portal, подписка и панель 3X-UI.
+# Дополнительный блок для прямого доступа по IP
 server {
-    listen 127.0.0.1:${INNER[selfweb]} ssl http2;
-    server_name $steal_domain;
-    ssl_certificate $DOMAIN_CERT_DIR/fullchain.pem;
-    ssl_certificate_key $DOMAIN_CERT_DIR/privkey.pem;
+    listen 127.0.0.1:${INNER[web]} ssl $ngx_listen_h2 proxy_protocol;
+    $ngx_h2_directive
+    server_name $HOST;
+    ssl_certificate /root/cert/ip/fullchain.pem;
+    ssl_certificate_key /root/cert/ip/privkey.pem;
     ssl_protocols TLSv1.2 TLSv1.3;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
     server_tokens off;
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
-    # Иначе редирект «добавить слеш» уйдёт на внутренний порт nginx.
     absolute_redirect off;
     access_log off;
-$self_locs
+$locs
     location $SUB_PATH {
         proxy_pass http://127.0.0.1:$sub_target;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
     location $panel_path {
@@ -1389,16 +1433,16 @@ $self_locs
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
     location /sub/singbox {
         proxy_pass http://127.0.0.1:${INNER[portal]};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
     location / {
@@ -1407,8 +1451,8 @@ $self_locs
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Real-IP \$proxy_protocol_addr;
+        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
         proxy_set_header X-Forwarded-Proto https;
     }
 }
@@ -1670,9 +1714,10 @@ UNIT
 sub_links() {
   local id=$1 tries=${2:-20} raw="" i port=${SUB_INTERNAL:-$SUB_PORT} scheme=http
   [[ -z ${SUB_INTERNAL:-} && $TRUSTED == yes ]] && scheme=https
+  local sub_h=${DOMAIN:-$HOST}
   for i in $(seq 1 "$tries"); do
     # Настоящий адрес в Host – 3X-UI подставит его в ссылки.
-    raw=$(curl -fsSk -m 10 -A "v2rayN/7.0" -H "Host: $HOST:$SUB_PORT" "$scheme://127.0.0.1:$port$SUB_PATH$id" 2>/dev/null) && [[ -n $raw ]] && break
+    raw=$(curl -fsSk -m 10 -A "v2rayN/7.0" -H "Host: $sub_h:$SUB_PORT" "$scheme://127.0.0.1:$port$SUB_PATH$id" 2>/dev/null) && [[ -n $raw ]] && break
     raw=""; sleep 2
   done
   if grep -q '://' <<<"$raw"; then echo "$raw"; else base64 -d <<<"$raw" 2>/dev/null || true; fi
@@ -1687,13 +1732,12 @@ usage() {
                       (обычный WireGuard работает нестабильно – включайте его, только если сервер и
                       пользователи за границей)
   --port 443          порт REALITY (TCP) и Hysteria2 (UDP), по умолчанию 443
-  --sni сайт          чужой сайт для маскировки (по умолчанию подбирается сам)
-  --domain домен      свой домен для маскировки (надёжнее): его A-запись должна вести на этот
-                      сервер, порт 80 свободен; сертификат Let's Encrypt установщик получит сам.
-                      Без флагов установщик спросит, какую маскировку выбрать
+  --sni сайт          сайт для маскировки REALITY (по умолчанию подбирается сам)
+  --domain домен      свой домен: панель, личный кабинет и подписки работают на этом домене
+                      с сертификатом Let's Encrypt. A-запись должна вести на этот сервер, порт 80 свободен.
   --panel-ssl ip|none сертификат панели: ip – Let's Encrypt на IP (нужен порт 80),
                       none – панель только через SSH-туннель (по умолчанию выбирается сам)
-  --cert файл --key файл  свой сертификат (например, для домена) вместо Let's Encrypt на IP;
+  --cert файл --key файл  свой сертификат вместо Let's Encrypt;
                       тогда --host – это домен из сертификата
   --user admin        имя первого клиента
   --host 1.2.3.4      адрес в ссылке, если IP определился неверно

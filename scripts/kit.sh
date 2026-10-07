@@ -688,6 +688,21 @@ check_masking() {
     fi
   done < <(jq -r '.[] | select(.protocol == "vless") | (.streamSettings | if type == "string" then fromjson else . end) as $s
     | select($s.security == "reality") | [.remark, ($s.realitySettings.serverNames[0] // ""), ($s.realitySettings.target // "")] | @tsv' <<<"$list" 2>/dev/null || true)
+  if [[ -n ${DOMAIN:-} ]]; then
+    local d_ips me=${HOST:-}
+    d_ips=$(getent ahostsv4 "$DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u || true)
+    if [[ -z $d_ips ]]; then
+      d_ips=$(curl -4 -fsS -m 5 "https://1.1.1.1/dns-query?name=$DOMAIN&type=A" -H "accept: application/dns-json" 2>/dev/null \
+        | jq -r '.Answer[]? | select(.type == 1) | .data' 2>/dev/null | sort -u || true)
+    fi
+    if [[ -n $d_ips ]] && grep -qx "$me" <<<"$d_ips"; then
+      c_ok "домен $DOMAIN указывает на этот сервер ($me)"
+    elif [[ -n $d_ips ]]; then
+      c_warn "домен $DOMAIN указывает на $(tr '\n' ' ' <<<"$d_ips"), а IP этого сервера: $me"
+    else
+      c_warn "не удалось определить IP для домена $DOMAIN"
+    fi
+  fi
   c_info "Проверка идёт с самого сервера: доступность из вашей сети она не покажет."
 }
 
