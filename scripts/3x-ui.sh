@@ -183,6 +183,17 @@ issue_domain_cert() {
     return 0
   fi
   [[ -x $acme ]] || { warn "Не нашёл acme.sh, которым установщик 3X-UI получает сертификаты: не могу выпустить сертификат для $DOMAIN."; return 1; }
+  if port_busy 80 tcp; then
+    if systemctl is-active -q nginx 2>/dev/null; then
+      systemctl stop nginx >/dev/null 2>&1 || true
+      rm -f /etc/nginx/sites-enabled/default
+      sleep 1
+    fi
+    if systemctl is-active -q apache2 2>/dev/null; then
+      systemctl stop apache2 >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
   port_busy 80 tcp && { warn "Порт 80/tcp занят: Let's Encrypt не сможет проверить домен $DOMAIN."; return 1; }
   say "Получаю сертификат Let's Encrypt для ${B}$DOMAIN${N}"
   install -m 600 /dev/null "$log"
@@ -386,15 +397,32 @@ main() {
     die "Порт $PORT/tcp уже занят. REALITY нужен свободный порт – укажите другой: --port 8443"
   fi
 
+  # Если порт 80 занят веб-сервером (например, nginx от прошлого прерванного запуска), освобождаем его
+  if port_busy 80 tcp; then
+    if systemctl is-active -q nginx 2>/dev/null; then
+      say "Останавливаю nginx для освобождения порта 80"
+      systemctl stop nginx >/dev/null 2>&1 || true
+      rm -f /etc/nginx/sites-enabled/default
+      sleep 1
+    fi
+    if systemctl is-active -q apache2 2>/dev/null; then
+      say "Останавливаю apache2 для освобождения порта 80"
+      systemctl stop apache2 >/dev/null 2>&1 || true
+      sleep 1
+    fi
+  fi
+
   if [[ $PANEL_SSL == auto ]]; then
-    if port_busy 80 tcp; then
+    if [[ -s /root/cert/ip/fullchain.pem ]]; then
+      PANEL_SSL=ip
+    elif port_busy 80 tcp; then
       PANEL_SSL=none
       warn "Порт 80 занят – сертификат для панели не получить. Панель будет доступна только через SSH-туннель."
     else
       PANEL_SSL=ip
     fi
   fi
-  [[ $PANEL_SSL == ip ]] && port_busy 80 tcp && die "Для сертификата панели нужен свободный порт 80/tcp."
+  [[ $PANEL_SSL == ip && ! -s /root/cert/ip/fullchain.pem ]] && port_busy 80 tcp && die "Для сертификата панели нужен свободный порт 80/tcp."
   # Доверенный сертификат (Let's Encrypt или свой) – панель и подписка доступны снаружи по HTTPS.
   TRUSTED=no
   [[ $PANEL_SSL == ip || $PANEL_SSL == custom ]] && TRUSTED=yes
@@ -1137,6 +1165,7 @@ setup_nginx() {
   apt-get install -y -qq nginx libnginx-mod-stream >/dev/null
   # Порт 80 нужен Let's Encrypt для продления сертификата – сайт nginx по умолчанию убираем.
   rm -f /etc/nginx/sites-enabled/default
+  systemctl stop nginx >/dev/null 2>&1 || true
 
   # Панель – только через nginx.
   local all
