@@ -9,7 +9,7 @@
   <meta name="robots" content="noindex, nofollow">
   <link rel="icon"
     href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
-  <link rel="stylesheet" href="style.css?v=8">
+  <link rel="stylesheet" href="style.css?v=9">
 </head>
 
 <body>
@@ -298,10 +298,10 @@
           <!-- Табы платформ -->
           <div class="platform-tabs" role="tablist">
             <button type="button" class="tab-btn active" data-tab="tab-hiddify">⚡ Hiddify (Рекомендуется)</button>
-            <button type="button" class="tab-btn" data-tab="tab-ios">🍏 iPhone / iPad (V2Box)</button>
+            <button type="button" class="tab-btn" data-tab="tab-ios">🍏 iPhone / iPad (Karing / V2Box)</button>
             <button type="button" class="tab-btn" data-tab="tab-android">🤖 Android (v2rayNG)</button>
             <button type="button" class="tab-btn" data-tab="tab-windows">🪟 Windows (v2rayN)</button>
-            <button type="button" class="tab-btn" data-tab="tab-macos">🍎 macOS (V2Box)</button>
+            <button type="button" class="tab-btn" data-tab="tab-macos">🍎 macOS (Hiddify / V2Box)</button>
           </div>
 
           <div class="card-body">
@@ -327,7 +327,7 @@
                 <h4 class="subheading" style="margin-top: 0; margin-bottom: 6px;">1. Установите Hiddify на ваше
                   устройство:</h4>
                 <div class="hiddify-grid">
-                  <a href="https://apps.apple.com/gb/app/hiddify-proxy-vpn/id6596777532" target="_blank" rel="noopener"
+                  <a href="https://apps.apple.com/app/hiddify-proxy-vpn/id6596777532" target="_blank" rel="noopener"
                     class="hiddify-dl-btn">
                     <span class="dl-icon">🍏</span>
                     <div class="dl-info">
@@ -364,10 +364,13 @@
                     <span class="dl-icon">🍎</span>
                     <div class="dl-info">
                       <span class="dl-platform">macOS (Mac)</span>
-                      <span class="dl-store">DMG / Mac App Store</span>
+                      <span class="dl-store">DMG / GitHub</span>
                     </div>
                   </a>
                 </div>
+                <p class="text-dim" style="font-size: 0.82rem; margin: 10px 0 0 2px; line-height: 1.45;">
+                  💡 <b>Пользователям Apple в РФ:</b> если в App Store пишет <i>«Приложение недоступно в вашей стране или регионе»</i> — установите <a href="https://apps.apple.com/app/karing/id6472431552" target="_blank" rel="noopener" style="color: var(--primary); text-decoration: underline; font-weight: 600;">Karing из App Store</a> (доступен в российском регионе без смены Apple ID) либо смените страну аккаунта в настройках.
+                </p>
               </div>
 
               <div class="steps-list">
@@ -410,11 +413,12 @@
                         <span class="alt-client-icon">🛡️</span>
                         <strong>Karing</strong>
                       </div>
-                      <p class="alt-client-desc">Быстрый кроссплатформенный клиент для iOS, Android, Windows и macOS с
-                        полной поддержкой ядра Sing-box, DoH и маршрутов.</p>
+                      <p class="alt-client-desc">Быстрый клиент на ядре Sing-box для iOS, macOS, Android и Windows. <b>Доступен в российском App Store без смены региона</b>.</p>
                     </div>
-                    <a href="https://karing.app" target="_blank" rel="noopener" class="btn btn-xs btn-secondary">Сайт
-                      Karing / Загрузки</a>
+                    <div style="display: flex; gap: 6px; flex-wrap: wrap;">
+                      <a href="https://apps.apple.com/app/karing/id6472431552" target="_blank" rel="noopener" class="btn btn-xs btn-primary">🍏 App Store</a>
+                      <a href="https://karing.app" target="_blank" rel="noopener" class="btn btn-xs btn-secondary">Сайт / Загрузки</a>
+                    </div>
                   </div>
                   <div class="alt-client-card">
                     <div>
@@ -432,23 +436,29 @@
               </div>
             </div>
 
-            <!-- Вкладка 2: iOS (V2Box) -->
+            <!-- Вкладка 2: iOS (Karing / V2Box) -->
             <div class="tab-content" id="tab-ios">
               <div class="notice-box notice-info">
-                <strong>Классическое подключение для iPhone / iPad:</strong> <b>V2Box</b> (самое простое альтернативное
-                приложение) или <b>Happ</b>. Работает по <b>Универсальной ссылке</b>.
+                <strong>Подключение для iPhone / iPad:</strong> <b>Karing</b> (доступен в российском App Store) или <b>V2Box</b> (для зарубежных Apple ID). Работают по <b>Универсальной ссылке</b> или <b>Умной ссылке</b>.
               </div>
 
               <div class="steps-list">
                 <div class="step-item">
                   <span class="step-num">1</span>
                   <div class="step-body">
-                    <strong>Установите V2Box:</strong>
-                    <p>Откройте App Store на iPhone и установите бесплатное приложение V2Box:</p>
-                    <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814065" target="_blank" rel="noopener"
-                      class="btn btn-sm btn-primary">
-                      🍏 Скачать V2Box в App Store
-                    </a>
+                    <strong>Установите приложение из App Store:</strong>
+                    <p>Выберите подходящее приложение для вашего региона Apple ID:</p>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                      <a href="https://apps.apple.com/app/karing/id6472431552" target="_blank" rel="noopener"
+                        class="btn btn-sm btn-primary">
+                        🍏 Karing в App Store (доступен в РФ)
+                      </a>
+                      <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814690" target="_blank" rel="noopener"
+                        class="btn btn-sm btn-secondary">
+                        🍏 V2Box в App Store (не РФ)
+                      </a>
+                    </div>
+                    <p class="text-dim" style="font-size: 0.8rem; margin-top: 6px;">💡 Если в App Store пишет <i>«Приложение недоступно в вашей стране или регионе»</i> — устанавливайте <b>Karing</b>.</p>
                   </div>
                 </div>
 
@@ -456,24 +466,26 @@
                   <span class="step-num">2</span>
                   <div class="step-body">
                     <strong>Скопируйте ссылку подписки:</strong>
-                    <p>Скопируйте <b>Универсальную подписку</b> (вариант №2 выше):</p>
-                    <button type="button" class="btn btn-sm btn-secondary copy-quick-sub-btn">
-                      📋 Скопировать Универсальную ссылку
-                    </button>
+                    <p>Скопируйте <b>Универсальную</b> ссылку (вариант №2) либо <b>Умную ссылку</b> (вариант №1 для Karing):</p>
+                    <div class="button-row">
+                      <button type="button" class="btn btn-sm btn-secondary copy-quick-sub-btn">
+                        📋 Скопировать Универсальную ссылку
+                      </button>
+                      <button type="button" class="btn btn-sm btn-secondary copy-quick-singbox-btn">
+                        📋 Скопировать Умную ссылку (Sing-box)
+                      </button>
+                    </div>
                   </div>
                 </div>
 
                 <div class="step-item">
                   <span class="step-num">3</span>
                   <div class="step-body">
-                    <strong>Добавьте в V2Box:</strong>
+                    <strong>Добавьте подписку и подключитесь:</strong>
                     <ol class="step-sublist">
-                      <li>Откройте <b>V2Box</b>.</li>
-                      <li>В нижнем меню перейдите во вкладку <b>Configs</b>.</li>
-                      <li>В правом верхнем углу нажмите <b>«+»</b> → <b>Add Subscription</b>.</li>
-                      <li>Вставьте скопированную ссылку в поле <b>URL</b> и нажмите <b>Save</b> (Сохранить).</li>
-                      <li>Выберите появившийся сервер, перейдите на главный экран <b>Home</b> и включите тумблер.
-                        Подтвердите добавление конфигурации в iOS. Готово!</li>
+                      <li><b>Для Karing:</b> откройте приложение → нажмите <b>«+»</b> вверху → <b>«Добавить из буфера обмена»</b> → нажмите переключатель подключения на главном экране.</li>
+                      <li><b>Для V2Box:</b> вкладка <b>Configs</b> → <b>«+»</b> → <b>Add Subscription</b> → вставьте ссылку в поле <b>URL</b> → <b>Save</b> → выберите сервер и включите тумблер на вкладке <b>Home</b>.</li>
+                      <li>При первом запуске подтвердите разрешение на добавление конфигурации VPN в iOS. <b>Готово!</b></li>
                     </ol>
                   </div>
                 </div>
@@ -493,9 +505,9 @@
                   <div class="step-body">
                     <strong>Установите v2rayNG:</strong>
                     <div class="button-row">
-                      <a href="https://play.google.com/store/apps/details?id=com.v2ray.ang" target="_blank"
+                      <a href="https://github.com/2dust/v2rayNG/releases/latest" target="_blank"
                         rel="noopener" class="btn btn-sm btn-primary">
-                        🤖 v2rayNG в Google Play
+                        🤖 Скачать v2rayNG (.apk) на GitHub
                       </a>
                     </div>
                   </div>
@@ -567,40 +579,54 @@
               </div>
             </div>
 
-            <!-- Вкладка 5: macOS (V2Box) -->
+            <!-- Вкладка 5: macOS -->
             <div class="tab-content" id="tab-macos">
               <div class="notice-box notice-info">
-                <strong>Классическое подключение для macOS:</strong> приложение <b>V2Box</b> из Mac App Store.
+                <strong>Подключение для macOS:</strong> рекомендуем <b>Hiddify для Mac</b> (прямой установщик .dmg без привязки к App Store) либо <b>Karing</b> / <b>V2Box</b>.
               </div>
 
               <div class="steps-list">
                 <div class="step-item">
                   <span class="step-num">1</span>
                   <div class="step-body">
-                    <strong>Установите V2Box:</strong>
-                    <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814065" target="_blank" rel="noopener"
-                      class="btn btn-sm btn-primary">
-                      🍎 V2Box в Mac App Store
-                    </a>
+                    <strong>Установите приложение:</strong>
+                    <div style="display: flex; gap: 8px; flex-wrap: wrap;">
+                      <a href="https://github.com/hiddify/hiddify-app/releases/latest" target="_blank" rel="noopener"
+                        class="btn btn-sm btn-primary">
+                        🍎 Hiddify для Mac (.dmg)
+                      </a>
+                      <a href="https://apps.apple.com/app/karing/id6472431552" target="_blank" rel="noopener"
+                        class="btn btn-sm btn-secondary">
+                        🍏 Karing в Mac App Store
+                      </a>
+                      <a href="https://apps.apple.com/app/v2box-v2ray-client/id6446814690" target="_blank" rel="noopener"
+                        class="btn btn-sm btn-secondary">
+                        🍎 V2Box в Mac App Store
+                      </a>
+                    </div>
                   </div>
                 </div>
 
                 <div class="step-item">
                   <span class="step-num">2</span>
                   <div class="step-body">
-                    <strong>Скопируйте ссылку:</strong>
-                    <button type="button" class="btn btn-sm btn-secondary copy-quick-sub-btn">
-                      📋 Скопировать Универсальную ссылку
-                    </button>
+                    <strong>Скопируйте ссылку подписки:</strong>
+                    <div class="button-row">
+                      <button type="button" class="btn btn-sm btn-primary copy-quick-singbox-btn">
+                        📋 Скопировать Умную ссылку (для Hiddify / Karing)
+                      </button>
+                      <button type="button" class="btn btn-sm btn-secondary copy-quick-sub-btn">
+                        📋 Скопировать Универсальную ссылку (для V2Box)
+                      </button>
+                    </div>
                   </div>
                 </div>
 
                 <div class="step-item">
                   <span class="step-num">3</span>
                   <div class="step-body">
-                    <strong>Добавьте в V2Box:</strong>
-                    <p>Перейдите во вкладку <b>Configs</b> → <b>«+»</b> → <b>Add Subscription</b> → вставьте ссылку и
-                      сохраните. Включите тумблер на главном экране.</p>
+                    <strong>Подключитесь:</strong>
+                    <p>Откройте приложение, нажмите <b>«Добавить из буфера»</b> (в Hiddify или Karing) либо вкладку <b>Configs</b> → <b>«+»</b> → <b>Add Subscription</b> (в V2Box). Включите тумблер подключения на главном экране. Готово!</p>
                   </div>
                 </div>
               </div>
@@ -674,8 +700,8 @@
     </div>
   </footer>
 
-  <script src="qr.js?v=8"></script>
-  <script src="app.js?v=8"></script>
+  <script src="qr.js?v=9"></script>
+  <script src="app.js?v=9"></script>
 </body>
 
 </html>
