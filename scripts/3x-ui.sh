@@ -1220,6 +1220,10 @@ setup_nginx() {
 
   local panel_path=/${XUI_WEB_BASE_PATH#/}
   panel_path=${panel_path%/}/
+  local sub_target="${INNER[sub]}"
+  if [[ -x /usr/local/bin/kit-portal ]]; then
+    sub_target="${INNER[portal]}"
+  fi
   {
     echo "# Сгенерировано 3x-ui.sh (3X-UI KIT) – перезаписывается при повторном запуске."
     echo "stream {"
@@ -1284,11 +1288,6 @@ server {
     absolute_redirect off;
     access_log off;
 $locs
-    local sub_target="${INNER[sub]}"
-    if [[ -x /usr/local/bin/kit-portal ]]; then
-      sub_target="${INNER[portal]}"
-    fi
-
     location $SUB_PATH {
         proxy_pass http://127.0.0.1:$sub_target;
         proxy_http_version 1.1;
