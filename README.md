@@ -70,8 +70,22 @@
 Подключитесь к серверу по SSH и выполните:
 
 ```bash
-bash <(curl -fsSL https://raw.githubusercontent.com/Qislord/3X-UI_KIT_SING_BOX/main/scripts/3x-ui.sh) --domain your-domain.com
+bash <(curl -fsSL https://raw.githubusercontent.com/Qislord/3X-UI_KIT_SING_BOX/main/scripts/3x-ui.sh) \
+  --domain your-domain.com \
+  --ws-domain ws.your-domain.com
 ```
+
+### Зачем разделять `--domain` и `--ws-domain`?
+
+- **`--domain your-domain.com`** — основной домен сервера:
+  - На нём работают панель 3X-UI, веб-кабинет пользователя (`kit-portal`) и ссылка подписки Sing-box / Clash.
+  - Скрипт сам автоматически выпускает и продлевает для него сертификат Let's Encrypt.
+  - Прямые скоростные протоколы (REALITY, Trojan gRPC, Hysteria2 UDP) подключаются напрямую к серверу.
+  - В панели Cloudflare DNS основной домен ставится в режим **DNS Only** (серое облако).
+- **`--ws-domain ws.your-domain.com`** — поддомен для WebSocket через Cloudflare CDN:
+  - Протоколы VMess-WS и VLESS-WS автоматически переключаются на этот поддомен (в адресе, SNI и заголовке `Host`).
+  - В Cloudflare DNS для поддомена `ws` включается **Proxied** (оранжевое облако), а режим SSL/TLS ставится в **Full**.
+  - Весь WebSocket-трафик проходит через распределённую сеть CDN Cloudflare: ТСПУ/DPI видят только обращение к адресам Cloudflare, реальный IP сервера скрыт, а соединение защищено от RST-инъекций и блокировок по IP.
 
 > Если домена пока нет или ставите на чистый IP, можно запустить без флагов:
 > `bash <(curl -fsSL https://raw.githubusercontent.com/Qislord/3X-UI_KIT_SING_BOX/main/scripts/3x-ui.sh)`

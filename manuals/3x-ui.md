@@ -187,6 +187,7 @@ scp root@IP:/root/kit-backup-ДАТА.tar.gz .
 | `--cert fullchain.pem --key privkey.pem --host домен` | свой сертификат, например для домена |
 | `--sni www.samsung.com` | чужой сайт для маскировки REALITY |
 | `--domain vpn.example.com` | свой домен для маскировки (A-запись на IP сервера, свободный порт 80) |
+| `--ws-domain ws.example.com` | поддомен для WebSocket через Cloudflare CDN (оранжевое облако) |
 | `--no-ufw` | не трогать файрвол |
 | `--multi-port` | прежняя схема: у каждого протокола свой порт, без nginx |
 
