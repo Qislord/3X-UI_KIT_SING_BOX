@@ -136,3 +136,20 @@ proxies:
 		t.Errorf("expected tail to be stripped, got %v", p1["name"])
 	}
 }
+
+func TestFixWSLinks(t *testing.T) {
+	wsDomain := "ws.statlyrpg.ru"
+	plain := "vless://uuid@statlyrpg.ru:443?type=ws&security=tls&sni=statlyrpg.ru&path=%2Fp&host=statlyrpg.ru#VLESS-WS\nhy2://pass@statlyrpg.ru:443#HY2"
+	fixed := string(sub.FixWSLinks([]byte(plain), wsDomain))
+
+	if !strings.Contains(fixed, "vless://uuid@ws.statlyrpg.ru:443") {
+		t.Errorf("expected fixed VLESS link to have wsDomain in host, got: %s", fixed)
+	}
+	if !strings.Contains(fixed, "sni=ws.statlyrpg.ru") {
+		t.Errorf("expected fixed VLESS link to have wsDomain in sni, got: %s", fixed)
+	}
+	if !strings.Contains(fixed, "hy2://pass@statlyrpg.ru:443") {
+		t.Errorf("expected HY2 link to remain untouched, got: %s", fixed)
+	}
+}
+

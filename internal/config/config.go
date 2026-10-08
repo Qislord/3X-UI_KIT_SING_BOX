@@ -18,6 +18,7 @@ type Config struct {
 	PortalListen string
 	Domain       string
 	PortalURL    string
+	WSDomain     string
 
 	SubBase     string
 	SubPath     string
@@ -41,6 +42,7 @@ func Load() *Config {
 		"PORTAL_DOMAIN":     "",
 		"PORTAL_PORT":       "10465",
 		"PORTAL_LISTEN":     "127.0.0.1",
+		"WS_DOMAIN":         "",
 		"SUB_BASE":          "",
 		"SUB_PATH":          "/sub/",
 		"SUB_INTERNAL":      "2097",
@@ -92,6 +94,7 @@ func Load() *Config {
 		PortalListen:    portalListen,
 		Domain:          domain,
 		PortalURL:       portalURL,
+		WSDomain:        envMap["WS_DOMAIN"],
 		SubBase:         envMap["SUB_BASE"],
 		SubPath:         envMap["SUB_PATH"],
 		SubInternal:     envMap["SUB_INTERNAL"],

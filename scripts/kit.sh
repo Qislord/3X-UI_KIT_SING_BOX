@@ -642,6 +642,14 @@ check_exposure() {
     [[ $m == 600 ]] || { c_bad perms "права на $f: $m (нужно 600)"; bad=1; }
   done
   ((bad)) || c_ok "файлы с паролями и ключами доступны только root"
+
+  if [[ -f /etc/nginx/nginx.conf ]]; then
+    local wc
+    wc=$(grep -oE 'worker_connections[[:space:]]+[0-9]+' /etc/nginx/nginx.conf 2>/dev/null | awk '{print $2}' | head -1 || true)
+    if [[ -n $wc && $wc -lt 2048 ]]; then
+      c_bad nginx_limits "лимит соединений nginx ($wc) мал для мультиплексирования – kit fix увеличит до 4096"
+    fi
+  fi
 }
 
 check_subscription() {
@@ -714,6 +722,18 @@ check_system() {
   fi
   used=$(df -P / | awk 'NR==2 {gsub("%", "", $5); print $5}')
   if ((${used:-0} >= 95)); then c_warn "диск заполнен на ${used}%"; else c_ok "место на диске: занято ${used:-?}%"; fi
+
+  # Проверка таблицы conntrack (при переполнении ядро молча сбрасывает пакеты)
+  if [[ -f /proc/sys/net/netfilter/nf_conntrack_max ]]; then
+    local ct_max ct_cur
+    ct_max=$(cat /proc/sys/net/netfilter/nf_conntrack_max 2>/dev/null || echo 0)
+    ct_cur=$(cat /proc/sys/net/netfilter/nf_conntrack_count 2>/dev/null || echo 0)
+    if ((ct_max < 32768)); then
+      c_bad conntrack "лимит conntrack слишком мал ($ct_max, занято $ct_cur) – возможны обрывы VPN (kit fix настроит sysctl)"
+    else
+      c_ok "таблица conntrack: $ct_cur / $ct_max записей"
+    fi
+  fi
 }
 
 run_checks() {
@@ -761,6 +781,35 @@ fix_action() { # код
       else warn "Конфиг nginx не проходит проверку – сертификат не перечитываю."; fi
       warn "Если сертификат всё ещё просрочен, запустите продление: ~/.acme.sh/acme.sh --cron" ;;
     ntp) say "Включаю синхронизацию времени"; timedatectl set-ntp true ;;
+    conntrack)
+      say "Оптимизирую параметры conntrack и сетевого стека"
+      modprobe nf_conntrack 2>/dev/null || true
+      cat >/etc/sysctl.d/99-vpn-conntrack.conf <<'EOF'
+# Оптимизация таблицы conntrack и сетевого стека (3X-UI KIT)
+net.netfilter.nf_conntrack_max = 65536
+net.netfilter.nf_conntrack_tcp_timeout_established = 600
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+net.netfilter.nf_conntrack_tcp_timeout_close_wait = 30
+net.core.somaxconn = 32768
+net.ipv4.tcp_max_syn_backlog = 16384
+EOF
+      sysctl -p /etc/sysctl.d/99-vpn-conntrack.conf >/dev/null 2>&1 || sysctl --system >/dev/null 2>&1 || true ;;
+    nginx_limits)
+      say "Оптимизирую лимиты соединений и дескрипторов nginx"
+      if ! grep -q 'worker_rlimit_nofile' /etc/nginx/nginx.conf 2>/dev/null; then
+        sed -i '1i worker_rlimit_nofile 16384;' /etc/nginx/nginx.conf
+      fi
+      sed -i -E 's/worker_connections[[:space:]]+[0-9]+;/worker_connections 4096;/' /etc/nginx/nginx.conf
+      if ! grep -q 'multi_accept' /etc/nginx/nginx.conf 2>/dev/null; then
+        sed -i -E 's/(worker_connections[[:space:]]+4096;)/\1\n\tmulti_accept on;/' /etc/nginx/nginx.conf
+      fi
+      mkdir -p /etc/systemd/system/nginx.service.d
+      cat >/etc/systemd/system/nginx.service.d/override.conf <<'EOF'
+[Service]
+LimitNOFILE=65535
+EOF
+      systemctl daemon-reload
+      if nginx -t >/dev/null 2>&1; then systemctl reload nginx; fi ;;
   esac
 }
 

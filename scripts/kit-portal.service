@@ -2,6 +2,7 @@
 Description=kit-portal: пользовательский портал и Sing-box подписка (3X-UI KIT)
 After=network-online.target x-ui.service nginx.service
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -20,7 +21,7 @@ ReadWritePaths=/etc/kit
 ProtectKernelTunables=true
 ProtectKernelModules=true
 ProtectControlGroups=true
-MemoryMax=32M
+MemoryMax=256M
 
 [Install]
 WantedBy=multi-user.target

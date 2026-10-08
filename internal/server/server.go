@@ -379,6 +379,9 @@ func (s *Server) handleClientSub(w http.ResponseWriter, r *http.Request) {
 			}
 		} else if strings.Contains(contentType, "text/plain") {
 			body = sub.StripLinks(body)
+			if s.cfg.WSDomain != "" {
+				body = sub.FixWSLinks(body, s.cfg.WSDomain)
+			}
 		}
 	}
 
@@ -409,13 +412,13 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	if s.cfg.StaticDir != "" {
 		diskFile := filepath.Join(s.cfg.StaticDir, relPath)
 		if fi, err := os.Stat(diskFile); err == nil && !fi.IsDir() {
-			s.serveDiskFile(w, diskFile)
+			s.serveDiskFile(w, r, diskFile)
 			return
 		}
 		// If requesting unknown path, fallback to index.html for SPA
 		indexDisk := filepath.Join(s.cfg.StaticDir, "index.html")
 		if _, err := os.Stat(indexDisk); err == nil {
-			s.serveDiskFile(w, indexDisk)
+			s.serveDiskFile(w, r, indexDisk)
 			return
 		}
 	}
@@ -437,14 +440,14 @@ func (s *Server) handleStatic(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
-func (s *Server) serveDiskFile(w http.ResponseWriter, path string) {
+func (s *Server) serveDiskFile(w http.ResponseWriter, r *http.Request, path string) {
 	ctype := mime.TypeByExtension(filepath.Ext(path))
 	if ctype == "" {
 		ctype = "application/octet-stream"
 	}
 	w.Header().Set("Content-Type", ctype)
 	w.Header().Set("Cache-Control", "no-cache, must-revalidate")
-	http.ServeFile(w, nil, path)
+	http.ServeFile(w, r, path)
 }
 
 func (s *Server) serveBytes(w http.ResponseWriter, path string, data []byte) {
@@ -620,6 +623,9 @@ func (s *Server) fetchRawSubscription(subID string) string {
 		}
 		if strings.HasPrefix(l, "tg://") {
 			l = proxy.FixTGLink(l, s.cfg.Domain)
+		}
+		if s.cfg.WSDomain != "" {
+			l = proxy.FixWSLink(l, s.cfg.WSDomain)
 		}
 		fixed = append(fixed, l)
 	}

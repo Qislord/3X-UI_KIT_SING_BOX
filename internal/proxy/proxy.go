@@ -550,6 +550,93 @@ func FixTGLink(link, host string) string {
 	return link
 }
 
+// FixWSLink updates the server address, host and sni for WebSocket proxies (VMess/VLESS)
+// to use a dedicated CDN/Cloudflare domain (wsDomain).
+func FixWSLink(link, wsDomain string) string {
+	if wsDomain == "" || link == "" {
+		return link
+	}
+
+	if strings.HasPrefix(link, "vmess://") {
+		body := link[len("vmess://"):]
+		frag := ""
+		if idx := strings.Index(body, "#"); idx != -1 {
+			frag = body[idx:]
+			body = body[:idx]
+		}
+		decoded, err := decodeBase64Safe(body)
+		if err != nil {
+			return link
+		}
+		var j map[string]interface{}
+		if err := json.Unmarshal([]byte(decoded), &j); err != nil {
+			return link
+		}
+		netVal, _ := j["net"].(string)
+		if strings.ToLower(netVal) == "ws" {
+			j["add"] = wsDomain
+			j["host"] = wsDomain
+			if tlsVal, ok := j["tls"].(string); ok && (tlsVal == "tls" || tlsVal == "reality") {
+				j["sni"] = wsDomain
+			}
+			data, err := json.Marshal(j)
+			if err != nil {
+				return link
+			}
+			return "vmess://" + base64.StdEncoding.EncodeToString(data) + frag
+		}
+		return link
+	}
+
+	if strings.HasPrefix(link, "vless://") {
+		u, err := url.Parse(link)
+		if err != nil {
+			return link
+		}
+		q := u.Query()
+		if strings.ToLower(q.Get("type")) == "ws" {
+			port := u.Port()
+			if port == "" {
+				port = "443"
+			}
+			u.Host = fmt.Sprintf("%s:%s", wsDomain, port)
+			q.Set("host", wsDomain)
+			sec := strings.ToLower(q.Get("security"))
+			if sec == "tls" || sec == "reality" {
+				q.Set("sni", wsDomain)
+			}
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+		return link
+	}
+
+	if strings.HasPrefix(link, "trojan://") {
+		u, err := url.Parse(link)
+		if err != nil {
+			return link
+		}
+		q := u.Query()
+		if strings.ToLower(q.Get("type")) == "ws" {
+			port := u.Port()
+			if port == "" {
+				port = "443"
+			}
+			u.Host = fmt.Sprintf("%s:%s", wsDomain, port)
+			q.Set("host", wsDomain)
+			sec := strings.ToLower(q.Get("security"))
+			if sec == "tls" || sec == "reality" {
+				q.Set("sni", wsDomain)
+			}
+			u.RawQuery = q.Encode()
+			return u.String()
+		}
+		return link
+	}
+
+	return link
+}
+
 func decodeBase64Safe(s string) (string, error) {
 	s = strings.TrimSpace(s)
 	// Add padding if missing

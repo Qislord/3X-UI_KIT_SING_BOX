@@ -61,6 +61,7 @@ ENV = {
     "SUB_PATH": "/sub/",
     "SUB_INTERNAL": "2097",
     "SINGLE": "yes",
+    "WS_DOMAIN": "",
     "XUI_PANEL_PORT": "2053",
     "XUI_WEB_BASE_PATH": "xui",
     "XUI_API_TOKEN": "",
@@ -94,6 +95,7 @@ PORTAL_LISTEN = os.environ.get("PORTAL_LISTEN") or ENV.get("PORTAL_LISTEN", "127
 # Домен портала: берем PORTAL_DOMAIN, либо DOMAIN, либо HOST
 DOMAIN = os.environ.get("PORTAL_DOMAIN") or ENV.get("PORTAL_DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", "127.0.0.1")
 PORTAL_URL = f"https://{DOMAIN}"
+WS_DOMAIN = os.environ.get("WS_DOMAIN") or ENV.get("WS_DOMAIN", "")
 
 
 # --- База данных SQLite ---
@@ -433,6 +435,46 @@ def fix_tg_link(link: str) -> str:
     return link
 
 
+def fix_ws_link(link: str, ws_domain: str) -> str:
+    """Заменяет адрес и host/sni на ws_domain для WebSocket протоколов (VMess / VLESS WS)."""
+    if not link or not ws_domain:
+        return link
+    if link.startswith("vmess://"):
+        try:
+            body = link[len("vmess://"):]
+            frag = ""
+            if "#" in body:
+                body, frag = body.split("#", 1)
+                frag = "#" + frag
+            pad = "=" * (-len(body) % 4)
+            raw = base64.b64decode(body + pad).decode("utf-8", "replace")
+            j = json.loads(raw)
+            if str(j.get("net", "")).lower() == "ws":
+                j["add"] = ws_domain
+                j["host"] = ws_domain
+                if str(j.get("tls", "")).lower() in ("tls", "reality"):
+                    j["sni"] = ws_domain
+                enc = base64.b64encode(json.dumps(j, separators=(",", ":")).encode("utf-8")).decode("utf-8")
+                return f"vmess://{enc}{frag}"
+        except Exception:
+            return link
+    elif link.startswith("vless://"):
+        try:
+            u = urllib.parse.urlparse(link)
+            params = parse_query_params(u.query)
+            if params.get("type", "").lower() == "ws":
+                port = u.port or 443
+                netloc = f"{u.username}@{ws_domain}:{port}" if u.username else f"{ws_domain}:{port}"
+                params["host"] = ws_domain
+                if params.get("security", "").lower() in ("tls", "reality"):
+                    params["sni"] = ws_domain
+                new_query = urllib.parse.urlencode(params)
+                return urllib.parse.urlunparse((u.scheme, netloc, u.path, u.params, new_query, u.fragment))
+        except Exception:
+            return link
+    return link
+
+
 def fetch_single_sub(sub_id: str) -> str:
     """Загружает одну подписку из локального бекенда 3X-UI."""
     if not sub_id:
@@ -487,7 +529,7 @@ def fetch_raw_subscription(sub_id: str) -> str:
 
     full_text = "\n".join(parts)
 
-    # Исправляем ссылки MTProto для Telegram
+    # Исправляем ссылки MTProto для Telegram и WebSocket для CDN
     fixed_lines = []
     for line in full_text.splitlines():
         line = line.strip()
@@ -495,6 +537,8 @@ def fetch_raw_subscription(sub_id: str) -> str:
             continue
         if line.startswith("tg://"):
             line = fix_tg_link(line)
+        if WS_DOMAIN:
+            line = fix_ws_link(line, WS_DOMAIN)
         fixed_lines.append(line)
     return "\n".join(fixed_lines)
 

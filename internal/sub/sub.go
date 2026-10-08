@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/itsnotkubrick/3X-UI_KIT/internal/proxy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -138,6 +139,41 @@ func StripLinks(body []byte) []byte {
 	}
 
 	out := strings.Join(clean, "\n")
+	if isBase64 {
+		return []byte(base64.StdEncoding.EncodeToString([]byte(out)))
+	}
+	return []byte(out)
+}
+
+// FixWSLinks rewrites WebSocket links (VMess/VLESS) in plain text or base64 to use wsDomain.
+func FixWSLinks(body []byte, wsDomain string) []byte {
+	if wsDomain == "" || len(body) == 0 {
+		return body
+	}
+	text := string(body)
+	text = strings.TrimSpace(text)
+	isBase64 := !strings.Contains(text, "://")
+
+	if isBase64 {
+		decoded, err := decodeBase64(text)
+		if err == nil {
+			text = string(decoded)
+		} else {
+			return body
+		}
+	}
+
+	lines := strings.Split(text, "\n")
+	var fixed []string
+	for _, l := range lines {
+		trimmed := strings.TrimSpace(l)
+		if trimmed == "" {
+			continue
+		}
+		fixed = append(fixed, proxy.FixWSLink(trimmed, wsDomain))
+	}
+
+	out := strings.Join(fixed, "\n")
 	if isBase64 {
 		return []byte(base64.StdEncoding.EncodeToString([]byte(out)))
 	}

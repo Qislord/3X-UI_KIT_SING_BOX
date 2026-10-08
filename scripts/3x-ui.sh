@@ -66,6 +66,7 @@ declare -A INNER=([reality]=10443 [xhttp]=10444 [mtproto]=10445 [web]=10446 [sel
 SNI2=""; SNI3=""
 # Свой домен (self-steal): REALITY маскируется под сайт на этом же сервере, а не под чужой.
 DOMAIN=""
+WS_DOMAIN=""
 DOMAIN_CERT_DIR=/root/cert/domain
 SELF_IP_CERT=no   # yes – сертификат на IP самоподписанный (Let's Encrypt отказал, пользователь согласился)
 PORTAL_USER_PASS=""; PORTAL_USER_URL=""; PORTAL_SINGBOX_SUB=""
@@ -309,6 +310,21 @@ ART
   echo "Ниже – данные для входа в панель и подключения."
 }
 
+setup_sysctl() {
+  say "Оптимизирую параметры ядра и conntrack для VPN-узла"
+  modprobe nf_conntrack 2>/dev/null || true
+  cat >/etc/sysctl.d/99-vpn-conntrack.conf <<'EOF'
+# Оптимизация таблицы conntrack и сетевого стека (3X-UI KIT)
+net.netfilter.nf_conntrack_max = 65536
+net.netfilter.nf_conntrack_tcp_timeout_established = 600
+net.netfilter.nf_conntrack_tcp_timeout_time_wait = 30
+net.netfilter.nf_conntrack_tcp_timeout_close_wait = 30
+net.core.somaxconn = 32768
+net.ipv4.tcp_max_syn_backlog = 16384
+EOF
+  sysctl -p /etc/sysctl.d/99-vpn-conntrack.conf >/dev/null 2>&1 || sysctl --system >/dev/null 2>&1 || true
+}
+
 main() {
   local a args=()
   for a in "$@"; do
@@ -351,7 +367,7 @@ main() {
   local PORT=443 SNI="" PANEL_SSL=auto HOST="" UFW=yes NAME="admin" yes=no protos=all ucert="" ukey="" multi=no
   while [[ $# -gt 0 ]]; do
     case $1 in
-      --port | --sni | --panel-ssl | --host | --user | --protocols | --domain | --cert | --key)
+      --port | --sni | --panel-ssl | --host | --user | --protocols | --domain | --ws-domain | --cert | --key)
         [[ -n ${2-} ]] || die "У параметра $1 нет значения (см. --help)" ;;
     esac
     case $1 in
@@ -362,6 +378,7 @@ main() {
       --user) NAME=$2; shift 2 ;;
       --protocols) protos=$2; shift 2 ;;
       --domain) DOMAIN=$2; shift 2 ;;
+      --ws-domain) WS_DOMAIN=$2; shift 2 ;;
       --cert) ucert=$2; shift 2 ;;
       --multi-port) multi=yes; shift ;;
       --key) ukey=$2; shift 2 ;;
@@ -376,17 +393,18 @@ main() {
   PORT=$((10#$PORT))
   # Регистр и точка в конце не важны: vpn.Example.com. – это тот же vpn.example.com.
   local k
-  for k in SNI DOMAIN HOST; do
+  for k in SNI DOMAIN WS_DOMAIN HOST; do
     [[ -z ${!k} ]] || { local v=${!k,,}; v=${v%.}; printf -v "$k" '%s' "$v"; }
   done
   PANEL_SSL=${PANEL_SSL,,}; protos=${protos,,}; protos=${protos// /}
   local re_host='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})$'
-  for k in "$SNI" "$DOMAIN" "$HOST"; do
+  for k in "$SNI" "$DOMAIN" "$WS_DOMAIN" "$HOST"; do
     [[ $k != *://* && $k != */* ]] || die "Нужно только имя, без https:// и без «/»: например vpn.example.com"
     [[ $k =~ ^[A-Za-z0-9.-]*$ ]] || die "Имя «$k» с не латинскими буквами не подойдёт: запишите его в виде punycode (xn--…), например через idn или в личном кабинете регистратора."
   done
   [[ -z $SNI || $SNI =~ $re_host ]] || die "--sni: нужно имя сайта, например dl.google.com"
   [[ -z $DOMAIN || $DOMAIN =~ $re_host ]] || die "--domain: нужно имя вашего домена, например vpn.example.com"
+  [[ -z $WS_DOMAIN || $WS_DOMAIN =~ $re_host ]] || die "--ws-domain: нужно имя поддомена для WebSocket (CDN), например ws.example.com"
   [[ -z $DOMAIN || $multi == no ]] || die "Свой домен работает только в режиме «всё на 443» – уберите --multi-port."
   [[ -z $HOST || $HOST =~ $re_host || $HOST =~ ^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$ ]] || die "--host: нужен IP (например 1.2.3.4) или домен"
   [[ $NAME =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || die "Имя: латиница, цифры, _ . - (до 32 символов)."
@@ -450,6 +468,7 @@ main() {
   wait_apt_idle
   apt-get update -qq
   apt-get install -y -qq curl jq openssl qrencode ca-certificates iproute2 ufw socat cron unzip >/dev/null
+  setup_sysctl
 
   HOST=${HOST:-$(public_ip)}
   [[ -n $HOST ]] || die "Не удалось узнать внешний IP. Укажите его: --host 1.2.3.4"
@@ -885,10 +904,12 @@ open_port() { # port net
 
 # External Proxy 3X-UI: ссылки ведут на HOST:443, хотя подключение слушает localhost.
 # SNI – только для TLS через nginx: у REALITY своё имя сайта маскировки, его не трогаем.
-ext_proxy() { # forceTls(same|tls) alpn(JSON)
-  local h=${DOMAIN:-$HOST}
+ext_proxy() { # forceTls(same|tls) alpn(JSON) [custom_dest] [custom_sni]
+  local h=${3:-${DOMAIN:-$HOST}}
   local sni=""
-  if [[ -n $DOMAIN ]]; then
+  if [[ -n ${4:-} ]]; then
+    sni=$4
+  elif [[ -n $DOMAIN ]]; then
     sni=$DOMAIN
   elif [[ ! $HOST =~ ^[0-9.]+$ ]]; then
     sni=$HOST
@@ -934,10 +955,12 @@ proto_xhttp() {
 
 proto_ws() {
   local settings stream
+  local ws_host=${WS_DOMAIN:-${DOMAIN:-$HOST}}
   settings=$(jq -nc --arg id "$(uuid)" --argjson c "$(client_base ws)" '{clients: [$c + {id: $id, flow: ""}], decryption: "none"}')
-  stream=$(jq -nc --argjson t "$(tls_json '["http/1.1"]')" --arg path "/$(rand_str 10 | tr 'A-Z' 'a-z')" '{network: "ws", security: "tls", wsSettings: {path: $path}, tlsSettings: $t}')
+  stream=$(jq -nc --argjson t "$(tls_json '["http/1.1"]')" --arg path "/$(rand_str 10 | tr 'A-Z' 'a-z')" --arg h "$ws_host" \
+    '{network: "ws", security: "tls", wsSettings: {path: $path, headers: {Host: $h}}, tlsSettings: $t}')
   if [[ $SINGLE == yes ]]; then
-    stream=$(jq -c --argjson e "$(ext_proxy tls '["http/1.1"]')" '{network, wsSettings, security: "none", externalProxy: $e}' <<<"$stream")
+    stream=$(jq -c --argjson e "$(ext_proxy tls '["http/1.1"]' "$ws_host" "$ws_host")" '{network, wsSettings, security: "none", externalProxy: $e}' <<<"$stream")
     add_inbound "VLESS-WS" "${INNER[ws]}" inner vless "$settings" "$stream"
   else
     add_inbound "VLESS-WS" "${PORTS[ws]}" tcp vless "$settings" "$stream"
@@ -958,10 +981,12 @@ proto_trojan() {
 
 proto_vmess() {
   local settings stream
+  local ws_host=${WS_DOMAIN:-${DOMAIN:-$HOST}}
   settings=$(jq -nc --arg id "$(uuid)" --argjson c "$(client_base vmess)" '{clients: [$c + {id: $id, security: "auto", alterId: 0}]}')
-  stream=$(jq -nc --argjson t "$(tls_json '["http/1.1"]')" --arg path "/$(rand_str 10 | tr 'A-Z' 'a-z')" '{network: "ws", security: "tls", wsSettings: {path: $path}, tlsSettings: $t}')
+  stream=$(jq -nc --argjson t "$(tls_json '["http/1.1"]')" --arg path "/$(rand_str 10 | tr 'A-Z' 'a-z')" --arg h "$ws_host" \
+    '{network: "ws", security: "tls", wsSettings: {path: $path, headers: {Host: $h}}, tlsSettings: $t}')
   if [[ $SINGLE == yes ]]; then
-    stream=$(jq -c --argjson e "$(ext_proxy tls '["http/1.1"]')" '{network, wsSettings, security: "none", externalProxy: $e}' <<<"$stream")
+    stream=$(jq -c --argjson e "$(ext_proxy tls '["http/1.1"]' "$ws_host" "$ws_host")" '{network, wsSettings, security: "none", externalProxy: $e}' <<<"$stream")
     add_inbound "VMess-WS" "${INNER[vmess]}" inner vmess "$settings" "$stream"
   else
     add_inbound "VMess-WS" "${PORTS[vmess]}" tcp vmess "$settings" "$stream"
@@ -1128,6 +1153,7 @@ write_kit_env() {
   {
     printf 'HOST=%q\n' "$HOST"
     printf 'DOMAIN=%q\n' "${DOMAIN:-}"
+    printf 'WS_DOMAIN=%q\n' "${WS_DOMAIN:-}"
     printf 'SUB_BASE=%q\n' "${SUB_URL%$SUBID}"
     printf 'SUB_PATH=%q\n' "$SUB_PATH"
     printf 'SUB_INTERNAL=%q\n' "${SUB_INTERNAL:-$SUB_PORT}"
@@ -1208,6 +1234,20 @@ HTML
 setup_nginx() {
   say "Настраиваю nginx: всё TCP через порт 443"
   apt-get install -y -qq nginx libnginx-mod-stream >/dev/null
+  # Оптимизация лимитов дескрипторов и соединений для stream-проксирования
+  if ! grep -q 'worker_rlimit_nofile' /etc/nginx/nginx.conf; then
+    sed -i '1i worker_rlimit_nofile 16384;' /etc/nginx/nginx.conf
+  fi
+  sed -i -E 's/worker_connections[[:space:]]+[0-9]+;/worker_connections 4096;/' /etc/nginx/nginx.conf
+  if ! grep -q 'multi_accept' /etc/nginx/nginx.conf; then
+    sed -i -E 's/(worker_connections[[:space:]]+4096;)/\1\n\tmulti_accept on;/' /etc/nginx/nginx.conf
+  fi
+  mkdir -p /etc/systemd/system/nginx.service.d
+  cat >/etc/systemd/system/nginx.service.d/override.conf <<'EOF'
+[Service]
+LimitNOFILE=65535
+EOF
+  systemctl daemon-reload
   # Порт 80 нужен Let's Encrypt для продления сертификата – сайт nginx по умолчанию убираем.
   rm -f /etc/nginx/sites-enabled/default
   systemctl stop nginx >/dev/null 2>&1 || true
@@ -1645,10 +1685,10 @@ install_kit_portal() {
   local d; d=$(dirname "${BASH_SOURCE[0]}")
 
   local exec_cmd="/usr/bin/python3 /usr/local/lib/kit-portal/kit_portal.py serve"
-  local mem_max="64M"
+  local mem_max="256M"
   if [[ -x /usr/local/bin/kit-portal ]]; then
     exec_cmd="/usr/local/bin/kit-portal serve"
-    mem_max="32M"
+    mem_max="256M"
   fi
 
   if [[ -f $d/kit-portal.service && ${BASH_SOURCE[0]} != /dev/fd/* && -x /usr/local/bin/kit-portal ]]; then
@@ -1659,6 +1699,7 @@ install_kit_portal() {
 Description=kit-portal: пользовательский портал и Sing-box подписка (3X-UI KIT)
 After=network-online.target x-ui.service nginx.service
 Wants=network-online.target
+StartLimitIntervalSec=0
 
 [Service]
 Type=simple
@@ -1735,6 +1776,8 @@ usage() {
   --sni сайт          сайт для маскировки REALITY (по умолчанию подбирается сам)
   --domain домен      свой домен: панель, личный кабинет и подписки работают на этом домене
                       с сертификатом Let's Encrypt. A-запись должна вести на этот сервер, порт 80 свободен.
+  --ws-domain домен   поддомен для WebSocket (VMess/VLESS) через Cloudflare CDN/прокси
+                      (например, ws.example.com; основной домен остаётся для REALITY/Trojan)
   --panel-ssl ip|none сертификат панели: ip – Let's Encrypt на IP (нужен порт 80),
                       none – панель только через SSH-туннель (по умолчанию выбирается сам)
   --cert файл --key файл  свой сертификат вместо Let's Encrypt;

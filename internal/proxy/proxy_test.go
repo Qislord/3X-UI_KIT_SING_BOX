@@ -110,3 +110,56 @@ func TestParseAmneziaVPN(t *testing.T) {
 		t.Errorf("expected Tag 'AmneziaWG (3.1 - защита заголовков)', got %s", p3.Tag)
 	}
 }
+
+func TestFixWSLink(t *testing.T) {
+	wsDomain := "ws.statlyrpg.ru"
+
+	// 1. VLESS-WS
+	vlessWS := "vless://b8313e1d-4464-42b5-829b-57774ae72be5@statlyrpg.ru:443?type=ws&security=tls&sni=statlyrpg.ru&path=%2Fwspath&host=statlyrpg.ru#VLESS-WS"
+	fixedVless := proxy.FixWSLink(vlessWS, wsDomain)
+	outVless := proxy.ParseProxyLink(fixedVless)
+	if outVless == nil {
+		t.Fatalf("failed to parse fixed VLESS link: %s", fixedVless)
+	}
+	if outVless["server"] != wsDomain {
+		t.Errorf("expected server %s, got %v", wsDomain, outVless["server"])
+	}
+	tls, _ := outVless["tls"].(map[string]interface{})
+	if tls["server_name"] != wsDomain {
+		t.Errorf("expected tls server_name %s, got %v", wsDomain, tls["server_name"])
+	}
+	transport, _ := outVless["transport"].(map[string]interface{})
+	headers, _ := transport["headers"].(map[string]string)
+	if headers["Host"] != wsDomain {
+		t.Errorf("expected Host header %s, got %v", wsDomain, headers["Host"])
+	}
+
+	// 2. VMess-WS (base64 json)
+	// {"v":"2","ps":"VMess-WS","add":"statlyrpg.ru","port":443,"id":"uuid123","aid":0,"scy":"auto","net":"ws","type":"none","host":"statlyrpg.ru","path":"/vmess","tls":"tls","sni":"statlyrpg.ru"}
+	vmessWS := "vmess://eyJ2IjoiMiIsInBzIjoiVk1lc3MtV1MiLCJhZGQiOiJzdGF0bHlycGcucnUiLCJwb3J0Ijo0NDMsImlkIjoidXVpZDEyMyIsImFpZCI6MCwic2N5IjoiYXV0byIsIm5ldCI6IndzIiwidHlwZSI6Im5vbmUiLCJob3N0Ijoic3RhdGx5cnBnLnJ1IiwicGF0aCI6Ii92bWVzcyIsInRscyI6InRscyIsInNuaSI6InN0YXRseXJwZy5ydSJ9"
+	fixedVMess := proxy.FixWSLink(vmessWS, wsDomain)
+	outVMess := proxy.ParseProxyLink(fixedVMess)
+	if outVMess == nil {
+		t.Fatalf("failed to parse fixed VMess link: %s", fixedVMess)
+	}
+	if outVMess["server"] != wsDomain {
+		t.Errorf("expected server %s, got %v", wsDomain, outVMess["server"])
+	}
+	tlsVMess, _ := outVMess["tls"].(map[string]interface{})
+	if tlsVMess["server_name"] != wsDomain {
+		t.Errorf("expected tls server_name %s, got %v", wsDomain, tlsVMess["server_name"])
+	}
+
+	// 3. VLESS-Reality (non-ws) should NOT be touched
+	reality := "vless://b8313e1d-4464-42b5-829b-57774ae72be5@statlyrpg.ru:443?security=reality&sni=dl.google.com&fp=chrome&pbk=123456&sid=abcdef&type=tcp&flow=xtls-rprx-vision#Reality-Direct"
+	fixedReality := proxy.FixWSLink(reality, wsDomain)
+	if fixedReality != reality {
+		t.Errorf("expected reality link to remain unchanged, got %s", fixedReality)
+	}
+
+	// 4. Empty wsDomain should leave link unchanged
+	if proxy.FixWSLink(vlessWS, "") != vlessWS {
+		t.Errorf("expected empty wsDomain to leave link unchanged")
+	}
+}
+
