@@ -180,6 +180,67 @@ func FixWSLinks(body []byte, wsDomain string) []byte {
 	return []byte(out)
 }
 
+// FixWSClash rewrites WebSocket proxies (VMess/VLESS/Trojan) in a Clash/Mihomo
+// config so they connect through the Cloudflare CDN host (wsDomain) on port 443.
+// Без этого Clash-клиенты могли ходить мимо CDN прямо на origin.
+func FixWSClash(clashYAML []byte, wsDomain string) ([]byte, error) {
+	if wsDomain == "" || len(clashYAML) == 0 {
+		return clashYAML, nil
+	}
+	var root map[string]interface{}
+	if err := yaml.Unmarshal(clashYAML, &root); err != nil {
+		return clashYAML, err
+	}
+	proxies, ok := root["proxies"].([]interface{})
+	if !ok || len(proxies) == 0 {
+		return clashYAML, nil
+	}
+
+	changed := false
+	for _, p := range proxies {
+		pm, ok := p.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		switch strings.ToLower(fmt.Sprint(pm["type"])) {
+		case "vmess", "vless", "trojan":
+		default:
+			continue
+		}
+		if strings.ToLower(fmt.Sprint(pm["network"])) != "ws" {
+			continue
+		}
+		pm["server"] = wsDomain
+		pm["port"] = 443
+		if tls, _ := pm["tls"].(bool); tls {
+			pm["servername"] = wsDomain
+		}
+		if opts, ok := pm["ws-opts"].(map[string]interface{}); ok {
+			if hdr, ok := opts["headers"].(map[string]interface{}); ok {
+				hdr["Host"] = wsDomain
+			} else {
+				opts["headers"] = map[string]interface{}{"Host": wsDomain}
+			}
+		} else {
+			pm["ws-opts"] = map[string]interface{}{
+				"headers": map[string]interface{}{"Host": wsDomain},
+			}
+		}
+		changed = true
+	}
+	if !changed {
+		return clashYAML, nil
+	}
+
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(root); err != nil {
+		return clashYAML, err
+	}
+	return buf.Bytes(), nil
+}
+
 // StripAWG removes AmneziaWG proxies from Clash YAML for apps that do not support AWG.
 func StripAWG(clashYAML []byte) ([]byte, error) {
 	var doc yaml.Node

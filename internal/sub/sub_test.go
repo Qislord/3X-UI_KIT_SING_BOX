@@ -153,3 +153,49 @@ func TestFixWSLinks(t *testing.T) {
 	}
 }
 
+func TestFixWSClash(t *testing.T) {
+	wsDomain := "ws.statlyrpg.ru"
+	sample := `
+proxies:
+  - name: "VLESS-WS"
+    type: vless
+    server: statlyrpg.ru
+    port: 2053
+    network: ws
+    tls: true
+    servername: statlyrpg.ru
+    ws-opts:
+      path: /wspath
+      headers:
+        Host: statlyrpg.ru
+  - name: "Reality"
+    type: vless
+    server: statlyrpg.ru
+    port: 443
+    network: tcp
+`
+	fixed, err := sub.FixWSClash([]byte(sample), wsDomain)
+	if err != nil {
+		t.Fatalf("FixWSClash failed: %v", err)
+	}
+
+	var root map[string]interface{}
+	if err := yaml.Unmarshal(fixed, &root); err != nil {
+		t.Fatalf("failed to unmarshal fixed YAML: %v", err)
+	}
+	proxies := root["proxies"].([]interface{})
+
+	ws := proxies[0].(map[string]interface{})
+	if ws["server"] != wsDomain || ws["port"] != 443 || ws["servername"] != wsDomain {
+		t.Errorf("ws proxy not rewritten to CDN: %+v", ws)
+	}
+	if hdr := ws["ws-opts"].(map[string]interface{})["headers"].(map[string]interface{}); hdr["Host"] != wsDomain {
+		t.Errorf("ws Host header not rewritten: %+v", hdr)
+	}
+
+	reality := proxies[1].(map[string]interface{})
+	if reality["server"] != "statlyrpg.ru" || reality["port"] != 443 {
+		t.Errorf("non-ws proxy must stay untouched: %+v", reality)
+	}
+}
+

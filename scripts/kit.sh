@@ -2,8 +2,8 @@
 # kit – управление сервером 3X-UI KIT: пользователи, обновление, резервная копия.
 # https://github.com/itsnotkubrick/3X-UI_KIT
 #
-#   kit user add имя [--gb 50] [--days 30] [--devices 3]
-#   kit user list | link имя | limit имя [--gb N] [--days N] | off имя | on имя | del имя
+#   kit user add имя [--gb 50] [--days 30] [--devices 3] [--all]
+#   kit user attach имя протокол | list | link имя | limit имя [--gb N] [--days N] | off имя | on имя | del имя
 #   kit update [--auto | --manual] | kit backup | kit check | kit fix | kit version
 
 # Запуск через sh (dash) ломается на непонятной ошибке синтаксиса – подскажем сразу.
@@ -72,6 +72,24 @@ portal_py() {
 # (subId в 3X-UI обязан быть уникальным) и теми же лимитами; kit-sub подмешивает её в Clash.
 awg_ids() { api GET inbounds/list | jq -r '[.[] | select(.protocol == "amneziawg") | .id] | sort | .[]'; }
 non_awg_ids() { api GET inbounds/list | jq -c '[.[] | select(.protocol != "amneziawg") | .id]'; }
+# Публичная подписка по умолчанию — только устойчивые протоколы: REALITY и WebSocket.
+core_ids() { api GET inbounds/list | jq -c '[.[] | select(.remark == "REALITY" or .remark == "VLESS-WS" or .remark == "VMess-WS") | .id]'; }
+# Протокол из команды → remark подключения в панели.
+proto_remark() {
+  case ${1,,} in
+    reality) echo "REALITY" ;;
+    xhttp) echo "XHTTP" ;;
+    ws | vless-ws) echo "VLESS-WS" ;;
+    vmess) echo "VMess-WS" ;;
+    trojan) echo "Trojan-gRPC" ;;
+    ss | shadowsocks) echo "Shadowsocks" ;;
+    hy2 | hysteria2) echo "Hysteria2" ;;
+    tuic) echo "TUIC" ;;
+    wg | wireguard) echo "WireGuard" ;;
+    mtproto) echo "MTProto" ;;
+    *) return 1 ;;
+  esac
+}
 
 awg_attach() { # имя subId [лимит-байт] [срок-мс] [устройств]
   local name=$1 sid=$2 total=${3:-0} exp=${4:-0} lim=${5:-0} n=1 id email have
@@ -131,7 +149,7 @@ show_link() { # имя subId
 }
 
 cmd_add() {
-  local name=${1:-} gb=0 days=0 devices=0
+  local name=${1:-} gb=0 days=0 devices=0 all=no
   valid_name "$name"; shift
   mapfile -t _args < <(eq_args "$@"); set -- ${_args[@]+"${_args[@]}"}
   while [[ $# -gt 0 ]]; do
@@ -139,15 +157,17 @@ cmd_add() {
       --gb) need_val "$@"; gb=$2; shift 2 ;;
       --days) need_val "$@"; days=$2; shift 2 ;;
       --devices) need_val "$@"; devices=$2; shift 2 ;;
-      *) die "Неизвестный параметр: $1" ;;
+      --all) all=yes; shift ;;
+      *) die "Неизвестный параметр: $1 (kit user add имя [--gb N] [--days N] [--devices N] [--all])" ;;
     esac
   done
   [[ $devices =~ ^[0-9]{1,4}$ ]] || die "--devices: целое число"
   devices=$((10#$devices))
   [[ -z $(client "$name") ]] || die "Пользователь $name уже есть. Ссылка: kit user link $name"
   local ids sid body
-  ids=$(non_awg_ids)
-  [[ $ids != "[]" ]] || die "На сервере нет подключений."
+  # По умолчанию — только устойчивые протоколы (REALITY + WS). --all включает остальные.
+  if [[ $all == yes ]]; then ids=$(non_awg_ids); else ids=$(core_ids); fi
+  [[ $ids != "[]" ]] || die "На сервере нет устойчивых подключений (REALITY/WebSocket). Добавьте их при установке или выдайте все: kit user add $name --all"
   gb_bytes "$gb" >/dev/null; days_ms "$days" >/dev/null
   gb=$((10#$gb)); days=$((10#$days))
   sid=$(rand_id)
@@ -155,7 +175,7 @@ cmd_add() {
     --argjson ip "$devices" --argjson ids "$ids" '{client: {email: $e, subId: $s, totalGB: $t, expiryTime: $x,
     limitIp: $ip, enable: true, comment: "kit"}, inboundIds: $ids}')
   api POST clients/add "$body" >/dev/null
-  awg_attach "$name" "$sid" "$(gb_bytes "$gb")" "$(days_ms "$days")" "$devices"
+  [[ $all == yes ]] && awg_attach "$name" "$sid" "$(gb_bytes "$gb")" "$(days_ms "$days")" "$devices"
 
   local portal_out pwd purl sing_sub
   portal_out=$(portal_py user add "$name" --sub-id "$sid" 2>/dev/null || true)
@@ -165,7 +185,12 @@ cmd_add() {
     sing_sub=$(jq -r '.singbox_sub_url // empty' <<<"$portal_out")
   fi
 
-  say "Пользователь $name добавлен во все протоколы ($(api GET inbounds/list | jq length))$( ((gb)) && echo ", лимит $gb ГБ")$( ((days)) && echo ", на $days дн")."
+  if [[ $all == yes ]]; then
+    say "Пользователь $name добавлен во все протоколы ($(api GET inbounds/list | jq length))$( ((gb)) && echo ", лимит $gb ГБ")$( ((days)) && echo ", на $days дн")."
+  else
+    say "Пользователь $name добавлен (устойчивые протоколы: REALITY + WebSocket)$( ((gb)) && echo ", лимит $gb ГБ")$( ((days)) && echo ", на $days дн")."
+    echo "${D}Нужен ещё протокол? kit user attach $name hy2|tuic|ss|awg|xhttp|trojan|mtproto${N}"
+  fi
 
   if [[ -n ${pwd:-} ]]; then
     echo
@@ -180,6 +205,32 @@ cmd_add() {
   show_link "$name" "$sid"
 }
 
+# Подключить пользователю дополнительный протокол (по умолчанию выдаются только
+# устойчивые: REALITY + WebSocket). Так клиент получает протокол по запросу.
+cmd_attach() { # имя протокол
+  local name=${1:-} proto=${2:-} c sid ids remark total exp lim
+  valid_name "$name"
+  [[ -n $proto ]] || die "Укажите протокол: kit user attach $name reality|ws|vmess|xhttp|trojan|hy2|tuic|ss|wg|awg|awg3|mtproto"
+  c=$(client "$name"); [[ -n $c ]] || die "Нет пользователя $name"
+  sid=$(jq -r '.subId' <<<"$c")
+  proto=${proto,,}
+  if [[ $proto == awg || $proto == awg3 ]]; then
+    total=$(jq -r '.totalGB // 0' <<<"$c"); exp=$(jq -r '.expiryTime // 0' <<<"$c"); lim=$(jq -r '.limitIp // 0' <<<"$c")
+    awg_attach "$name" "$sid" "$total" "$exp" "$lim"
+    say "AmneziaWG подключён пользователю $name (классика и 3.1)."
+    echo "${D}Клиенту нужно обновить подписку. Ссылки vpn://: kit user link $name --all${N}"
+    return
+  fi
+  remark=$(proto_remark "$proto") || die "Неизвестный протокол: $proto (reality, ws, vmess, xhttp, trojan, hy2, tuic, ss, wg, awg, awg3, mtproto)"
+  ids=$(api GET inbounds/list | jq -c --arg r "$remark" '[.[] | select(.remark == $r) | .id]')
+  [[ $ids != "[]" ]] || die "Протокол $proto ($remark) не установлен на этом сервере."
+  api POST "clients/$name/attach" "$(jq -nc --argjson i "$ids" '{inboundIds: $i}')" >/dev/null
+  say "Протокол $proto ($remark) подключён пользователю $name."
+  echo "${D}Клиенту нужно обновить подписку в приложении.${N}"
+  [[ $proto == mtproto ]] && echo "${D}Ссылка для Telegram: kit user link $name --all${N}"
+  return 0
+}
+
 cmd_link() {
   local name=${1:-} all=${2:-} c
   valid_name "$name"
@@ -189,7 +240,7 @@ cmd_link() {
     local sid raw out="" suffix
     sid=$(jq -r '.subId' <<<"$c")
     for suffix in "" -awg; do
-      raw=$(curl -fsSk -m 10 -A "v2rayN/7" -H "Host: $HOST" "http://127.0.0.1:$SUB_INTERNAL$SUB_PATH$sid$suffix" 2>/dev/null || true)
+      raw=$(curl -fsSk -m 10 -A "v2rayN/7" -H "Host: ${DOMAIN:-$HOST}" "http://127.0.0.1:$SUB_INTERNAL$SUB_PATH$sid$suffix" 2>/dev/null || true)
       grep -q '://' <<<"$raw" || raw=$(base64 -d <<<"$raw" 2>/dev/null || true)
       out+=$(grep -E '^(vpn|tg)://' <<<"$raw" || true)$'\n'
     done
@@ -675,7 +726,9 @@ check_subscription() {
   done
   rm -f "$body"
   if [[ ${SINGLE:-no} == yes ]]; then
-    code=$(curl -sk -m 10 -A "Happ/1.0" -o /dev/null -w '%{http_code}' "https://127.0.0.1$path$sid" 2>/dev/null || true)
+    # Подписка теперь живёт на CDN-домене (server_name), а не на голом IP.
+    local sub_host=${WEB_DOMAIN:-127.0.0.1}
+    code=$(curl -sk -m 10 -A "Happ/1.0" --resolve "$sub_host:443:127.0.0.1" -o /dev/null -w '%{http_code}' "https://$sub_host$path$sid" 2>/dev/null || true)
     if [[ $code == 200 ]]; then c_ok "подписка отвечает и через nginx (443)"; else c_bad svc:nginx "подписка через nginx: HTTP ${code:-нет ответа} (ищите причину выше)"; fi
   fi
 }
@@ -709,6 +762,34 @@ check_masking() {
       c_warn "домен $DOMAIN указывает на $(tr '\n' ' ' <<<"$d_ips"), а IP этого сервера: $me"
     else
       c_warn "не удалось определить IP для домена $DOMAIN"
+    fi
+  fi
+
+  # Веб-домен должен быть за Cloudflare (Proxied), иначе он раскрывает IP сервера.
+  if [[ -n ${WEB_DOMAIN:-} && -n ${HOST:-} ]]; then
+    local w_ips
+    w_ips=$(getent ahostsv4 "$WEB_DOMAIN" 2>/dev/null | awk '{print $1}' | sort -u || true)
+    if [[ -z $w_ips ]]; then
+      w_ips=$(curl -4 -fsS -m 5 "https://1.1.1.1/dns-query?name=$WEB_DOMAIN&type=A" -H "accept: application/dns-json" 2>/dev/null \
+        | jq -r '.Answer[]? | select(.type == 1) | .data' 2>/dev/null | sort -u || true)
+    fi
+    if grep -qx "$HOST" <<<"$w_ips"; then
+      c_warn "веб-домен $WEB_DOMAIN указывает прямо на IP сервера (DNS Only) – Cloudflare не скрывает узел. Включите Proxied (оранжевое облако)"
+    elif [[ -n $w_ips ]]; then
+      c_ok "веб-домен $WEB_DOMAIN за прокси (не раскрывает IP сервера)"
+    else
+      c_warn "не удалось определить IP веб-домена $WEB_DOMAIN"
+    fi
+  fi
+
+  # По IP и посторонним именам должен отдаваться сайт-заглушка, а не VPN-кабинет.
+  if [[ ${SINGLE:-no} == yes && -n ${WEB_DOMAIN:-} && ${WEB_DOMAIN} != "${HOST:-}" && ${WEB_DOMAIN} != "${DOMAIN:-}" ]]; then
+    local decoy
+    decoy=$(curl -sk -m 8 "https://127.0.0.1/" 2>/dev/null || true)
+    if [[ $decoy == *"Личный кабинет"* ]]; then
+      c_bad "" "по IP/неизвестному имени отдаётся портал, а не заглушка (nginx kit.conf) – переустановите: kit update --force"
+    elif [[ -n $decoy ]]; then
+      c_ok "по IP и посторонним именам отдаётся сайт-заглушка"
     fi
   fi
   c_info "Проверка идёт с самого сервера: доступность из вашей сети она не покажет."
@@ -952,8 +1033,11 @@ usage() {
   cat <<EOF
 ${B}kit${N} $KIT_VERSION – управление сервером 3X-UI KIT
 
-Пользователи (один пользователь сразу на всех протоколах):
-  kit user add имя [--gb 50] [--days 30] [--devices 3]   добавить, создать аккаунт портала и подписку
+Пользователи (по умолчанию — только устойчивые протоколы: REALITY + WebSocket):
+  kit user add имя [--gb 50] [--days 30] [--devices 3] [--all]   добавить пользователя и подписку
+                                                          (--all – сразу все протоколы)
+  kit user attach имя протокол                            выдать доп. протокол по запросу:
+                                                          hy2, tuic, ss, awg, awg3, xhttp, trojan, mtproto, wg
   kit user list                                           трафик, срок, статус
   kit user link имя [--all]                               подписка и QR; --all – ещё vpn:// и tg://
   kit user limit имя [--gb N] [--days N] [--devices N]    изменить лимиты (0 – без ограничений)
@@ -977,6 +1061,7 @@ EOF
 cmd_key="${1:-} ${2:-}"; cmd_key=${cmd_key,,}; cmd_key=${cmd_key/users /user }
 case "$cmd_key" in
   "user add") shift 2; cmd_add "$@" ;;
+  "user attach") shift 2; cmd_attach "$@" ;;
   "user list") cmd_list; update_hint ;;
   "user link") shift 2; cmd_link "$@" ;;
   "user limit") shift 2; cmd_limit "$@" ;;

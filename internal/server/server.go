@@ -100,6 +100,15 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/", s.handleStatic)
 }
 
+// webDomain returns the public (Cloudflare-proxied) domain used for portal,
+// panel and subscription URLs. Falls back to the main domain.
+func (s *Server) webDomain() string {
+	if s.cfg.WebDomain != "" {
+		return s.cfg.WebDomain
+	}
+	return s.cfg.Domain
+}
+
 func (s *Server) getClientIP(r *http.Request) string {
 	if realIP := r.Header.Get("X-Real-IP"); realIP != "" {
 		return strings.TrimSpace(realIP)
@@ -224,8 +233,8 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 	rawSub := s.fetchRawSubscription(user.SubID)
 
 	subPath := "/" + strings.Trim(s.cfg.SubPath, "/") + "/"
-	universalSubURL := fmt.Sprintf("https://%s%s%s", s.cfg.Domain, subPath, user.SubID)
-	singboxSubURL := fmt.Sprintf("https://%s/sub/singbox?token=%s", s.cfg.Domain, user.SubToken)
+	universalSubURL := fmt.Sprintf("https://%s%s%s", s.webDomain(), subPath, user.SubID)
+	singboxSubURL := fmt.Sprintf("https://%s/sub/singbox?token=%s", s.webDomain(), user.SubToken)
 
 	var parsedProxies []proxy.ProxyInfo
 	var cleanLines []string
@@ -250,7 +259,7 @@ func (s *Server) handleMe(w http.ResponseWriter, r *http.Request) {
 			"created_at": user.CreatedAt,
 		},
 		"stats":             stats,
-		"domain":            s.cfg.Domain,
+		"domain":            s.webDomain(),
 		"universal_sub_url": universalSubURL,
 		"singbox_sub_url":   singboxSubURL,
 		"sub_url":           universalSubURL,
@@ -278,7 +287,7 @@ func (s *Server) handleRotateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	singboxSubURL := fmt.Sprintf("https://%s/sub/singbox?token=%s", s.cfg.Domain, newToken)
+	singboxSubURL := fmt.Sprintf("https://%s/sub/singbox?token=%s", s.webDomain(), newToken)
 	s.sendJSON(w, http.StatusOK, map[string]interface{}{
 		"success":   true,
 		"sub_token": newToken,
@@ -314,7 +323,7 @@ func (s *Server) handleSingboxSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Profile-Title", fmt.Sprintf("%s (Sing-Box)", s.cfg.Domain))
+	w.Header().Set("Profile-Title", fmt.Sprintf("%s (Sing-Box)", s.webDomain()))
 	w.Header().Set("Profile-Update-Interval", "24")
 
 	if stats, err := s.get3XUIClientInfo(user.Username); err == nil && len(stats) > 0 {
@@ -347,9 +356,11 @@ func (s *Server) handleClientSub(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ua := r.Header.Get("User-Agent")
-	host := r.Host
+	// 3X-UI строит адреса прямых протоколов (REALITY/Trojan/SS/…) от переданного Host.
+	// Берём основной домен: на CDN-домене они бы не подключались.
+	host := s.cfg.MainDomain
 	if host == "" {
-		host = s.cfg.Domain
+		host = s.webDomain()
 	}
 	accept := r.Header.Get("Accept")
 
@@ -377,9 +388,16 @@ func (s *Server) handleClientSub(w http.ResponseWriter, r *http.Request) {
 					body = merged
 				}
 			}
-		} else if strings.Contains(contentType, "text/plain") {
+		} else if !clash && strings.Contains(contentType, "text/plain") {
 			body = sub.StripLinks(body)
-			if s.cfg.WSDomain != "" {
+		}
+		// WebSocket через Cloudflare: адрес должен быть на CDN-домене и в YAML, и в ссылках.
+		if s.cfg.WSDomain != "" {
+			if clash {
+				if fixed, err := sub.FixWSClash(body, s.cfg.WSDomain); err == nil {
+					body = fixed
+				}
+			} else if strings.Contains(contentType, "text/plain") {
 				body = sub.FixWSLinks(body, s.cfg.WSDomain)
 			}
 		}
@@ -560,7 +578,10 @@ func (s *Server) fetchSingleSub(subID string) string {
 		port = "2097"
 	}
 	subPath := "/" + strings.Trim(s.cfg.SubPath, "/") + "/"
-	host := s.cfg.Domain
+	host := s.cfg.MainDomain
+	if host == "" {
+		host = s.cfg.Domain
+	}
 
 	for _, scheme := range []string{"http", "https"} {
 		reqURL := fmt.Sprintf("%s://127.0.0.1:%s%s%s", scheme, port, subPath, subID)
@@ -622,7 +643,12 @@ func (s *Server) fetchRawSubscription(subID string) string {
 			continue
 		}
 		if strings.HasPrefix(l, "tg://") {
-			l = proxy.FixTGLink(l, s.cfg.Domain)
+			// MTProto ходит напрямую на узел, CDN его не проксирует.
+			tgHost := s.cfg.MainDomain
+			if tgHost == "" {
+				tgHost = s.webDomain()
+			}
+			l = proxy.FixTGLink(l, tgHost)
 		}
 		if s.cfg.WSDomain != "" {
 			l = proxy.FixWSLink(l, s.cfg.WSDomain)

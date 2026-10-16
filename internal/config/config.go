@@ -17,6 +17,8 @@ type Config struct {
 	PortalPort   int
 	PortalListen string
 	Domain       string
+	WebDomain    string
+	MainDomain   string
 	PortalURL    string
 	WSDomain     string
 
@@ -42,6 +44,7 @@ func Load() *Config {
 		"PORTAL_DOMAIN":     "",
 		"PORTAL_PORT":       "10465",
 		"PORTAL_LISTEN":     "127.0.0.1",
+		"WEB_DOMAIN":        "",
 		"WS_DOMAIN":         "",
 		"SUB_BASE":          "",
 		"SUB_PATH":          "/sub/",
@@ -72,7 +75,16 @@ func Load() *Config {
 		portalListen = "127.0.0.1"
 	}
 
-	domain := envMap["PORTAL_DOMAIN"]
+	// Клиентский (публичный) домен портала, панели и подписки. Работает через
+	// Cloudflare (Proxied), поэтому реальный IP сервера в ссылки не попадает.
+	// WS_DOMAIN идёт первым запасным: по умолчанию веб живёт на том же CDN-домене.
+	domain := envMap["WEB_DOMAIN"]
+	if domain == "" {
+		domain = envMap["PORTAL_DOMAIN"]
+	}
+	if domain == "" {
+		domain = envMap["WS_DOMAIN"]
+	}
 	if domain == "" {
 		domain = envMap["DOMAIN"]
 	}
@@ -85,6 +97,15 @@ func Load() *Config {
 
 	portalURL := "https://" + domain
 
+	// Основной домен (DNS Only) — на него подключаются прямые протоколы и MTProto.
+	mainDomain := envMap["DOMAIN"]
+	if mainDomain == "" {
+		mainDomain = envMap["HOST"]
+	}
+	if mainDomain == "" {
+		mainDomain = domain
+	}
+
 	return &Config{
 		ConfigEnvPath:   cfgEnvPath,
 		XUIEnvPath:      xuiEnvPath,
@@ -93,6 +114,8 @@ func Load() *Config {
 		PortalPort:      portalPort,
 		PortalListen:    portalListen,
 		Domain:          domain,
+		WebDomain:       domain,
+		MainDomain:      mainDomain,
 		PortalURL:       portalURL,
 		WSDomain:        envMap["WS_DOMAIN"],
 		SubBase:         envMap["SUB_BASE"],

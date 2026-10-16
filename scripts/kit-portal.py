@@ -92,10 +92,12 @@ load_env_file(XUI_ENV_PATH)
 PORTAL_PORT = int(os.environ.get("PORTAL_PORT") or ENV.get("PORTAL_PORT", "10465"))
 PORTAL_LISTEN = os.environ.get("PORTAL_LISTEN") or ENV.get("PORTAL_LISTEN", "127.0.0.1")
 
-# Домен портала: берем PORTAL_DOMAIN, либо DOMAIN, либо HOST
+# Домен портала (Cloudflare): берём PORTAL_DOMAIN, либо DOMAIN, либо HOST
 DOMAIN = os.environ.get("PORTAL_DOMAIN") or ENV.get("PORTAL_DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", "127.0.0.1")
 PORTAL_URL = f"https://{DOMAIN}"
 WS_DOMAIN = os.environ.get("WS_DOMAIN") or ENV.get("WS_DOMAIN", "")
+# Основной домен (DNS Only): на него подключаются прямые протоколы и MTProto.
+MAIN_DOMAIN = os.environ.get("DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", DOMAIN)
 
 
 # --- База данных SQLite ---
@@ -428,8 +430,8 @@ def fix_tg_link(link: str) -> str:
         return link
     # Заменяем внутренний порт 10445 на внешний 443 (в режиме единого порта через Nginx)
     link = re.sub(r'([?&]port=)10445\b', r'\g<1>443', link)
-    # Если указан server=127.0.0.1 или localhost, подставляем актуальный домен или хост
-    host = DOMAIN or ENV.get("HOST", "")
+    # Если указан server=127.0.0.1 или localhost, подставляем основной домен или хост
+    host = MAIN_DOMAIN or DOMAIN or ENV.get("HOST", "")
     if host and host not in ("127.0.0.1", "localhost"):
         link = re.sub(r'([?&]server=)(?:127\.0\.0\.1|localhost)\b', rf'\g<1>{host}', link)
     return link
@@ -452,6 +454,7 @@ def fix_ws_link(link: str, ws_domain: str) -> str:
             if str(j.get("net", "")).lower() == "ws":
                 j["add"] = ws_domain
                 j["host"] = ws_domain
+                j["port"] = 443  # Cloudflare проксирует только 443/2053/2083/2087/2096/8443
                 if str(j.get("tls", "")).lower() in ("tls", "reality"):
                     j["sni"] = ws_domain
                 enc = base64.b64encode(json.dumps(j, separators=(",", ":")).encode("utf-8")).decode("utf-8")
@@ -463,7 +466,7 @@ def fix_ws_link(link: str, ws_domain: str) -> str:
             u = urllib.parse.urlparse(link)
             params = parse_query_params(u.query)
             if params.get("type", "").lower() == "ws":
-                port = u.port or 443
+                port = 443  # не оставляем исходный порт: через CDN доступен только 443
                 netloc = f"{u.username}@{ws_domain}:{port}" if u.username else f"{ws_domain}:{port}"
                 params["host"] = ws_domain
                 if params.get("security", "").lower() in ("tls", "reality"):
@@ -481,7 +484,8 @@ def fetch_single_sub(sub_id: str) -> str:
         return ""
     sub_internal = ENV.get("SUB_INTERNAL", "2097")
     sub_path = "/" + ENV.get("SUB_PATH", "sub").strip("/") + "/"
-    host = ENV.get("PORTAL_DOMAIN") or ENV.get("DOMAIN") or ENV.get("HOST", "127.0.0.1")
+    # Host для 3X-UI — основной домен: от него строятся адреса прямых протоколов.
+    host = MAIN_DOMAIN or ENV.get("HOST", "127.0.0.1")
 
     ctx = ssl.create_default_context()
     ctx.check_hostname = False

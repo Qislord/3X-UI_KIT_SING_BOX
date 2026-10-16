@@ -150,6 +150,13 @@ func TestFixWSLink(t *testing.T) {
 		t.Errorf("expected tls server_name %s, got %v", wsDomain, tlsVMess["server_name"])
 	}
 
+	// 2b. Нестандартный порт заменяется на 443: Cloudflare проксирует только 443/2053/…
+	vlessWS2053 := "vless://b8313e1d-4464-42b5-829b-57774ae72be5@statlyrpg.ru:2053?type=ws&security=tls&sni=statlyrpg.ru&path=%2Fwspath&host=statlyrpg.ru#VLESS-WS"
+	out2053 := proxy.ParseProxyLink(proxy.FixWSLink(vlessWS2053, wsDomain))
+	if out2053 == nil || out2053["server_port"] != 443 {
+		t.Errorf("expected server_port 443 after fix, got %v", out2053["server_port"])
+	}
+
 	// 3. VLESS-Reality (non-ws) should NOT be touched
 	reality := "vless://b8313e1d-4464-42b5-829b-57774ae72be5@statlyrpg.ru:443?security=reality&sni=dl.google.com&fp=chrome&pbk=123456&sid=abcdef&type=tcp&flow=xtls-rprx-vision#Reality-Direct"
 	fixedReality := proxy.FixWSLink(reality, wsDomain)

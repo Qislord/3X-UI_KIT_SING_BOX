@@ -57,7 +57,9 @@ SNI_CANDIDATES=(dl.google.com www.amazon.com www.samsung.com www.yahoo.com)
 ALL_PROTOS=(reality hy2 xhttp ws trojan vmess ss tuic wg awg awg3 mtproto)
 # Обычный WireGuard легко распознаётся сетевым оборудованием и работает нестабильно
 # (проверено 2026-09-27: рукопожатие доходит до сервера, ответ – нет). По умолчанию не ставим.
-DEFAULT_PROTOS=(reality hy2 xhttp ws trojan vmess ss tuic awg awg3 mtproto)
+# MTProto (Telegram-прокси) — прямой протокол, который ТСПУ хорошо распознаёт, а ссылку
+# tg:// легко расшарить. По умолчанию не ставим: включается явно, --protocols ...,mtproto.
+DEFAULT_PROTOS=(reality hy2 xhttp ws trojan vmess ss tuic awg awg3)
 declare -A PORTS=([xhttp]=8443 [ws]=2053 [trojan]=2083 [vmess]=2087 [ss]=8388 [tuic]=8444 [wg]=51820 [awg]=51821 [awg3]=51822 [mtproto]=8445)
 PROTOS=(); CREATED=(); OPEN=()
 # Режим «всё TCP на 443»: nginx разводит по SNI и путям, подключения слушают только localhost.
@@ -67,6 +69,10 @@ SNI2=""; SNI3=""
 # Свой домен (self-steal): REALITY маскируется под сайт на этом же сервере, а не под чужой.
 DOMAIN=""
 WS_DOMAIN=""
+# Клиентский веб-домен (Cloudflare Proxied): портал, панель и подписка.
+# По умолчанию совпадает с --ws-domain, чтобы реальный IP не попадал в ссылки.
+WEB_DOMAIN=""
+SEPARATE_WEB=no
 DOMAIN_CERT_DIR=/root/cert/domain
 SELF_IP_CERT=no   # yes – сертификат на IP самоподписанный (Let's Encrypt отказал, пользователь согласился)
 PORTAL_USER_PASS=""; PORTAL_USER_URL=""; PORTAL_SINGBOX_SUB=""
@@ -367,7 +373,7 @@ main() {
   local PORT=443 SNI="" PANEL_SSL=auto HOST="" UFW=yes NAME="admin" yes=no protos=all ucert="" ukey="" multi=no
   while [[ $# -gt 0 ]]; do
     case $1 in
-      --port | --sni | --panel-ssl | --host | --user | --protocols | --domain | --ws-domain | --cert | --key)
+      --port | --sni | --panel-ssl | --host | --user | --protocols | --domain | --ws-domain | --web-domain | --cert | --key)
         [[ -n ${2-} ]] || die "У параметра $1 нет значения (см. --help)" ;;
     esac
     case $1 in
@@ -379,6 +385,7 @@ main() {
       --protocols) protos=$2; shift 2 ;;
       --domain) DOMAIN=$2; shift 2 ;;
       --ws-domain) WS_DOMAIN=$2; shift 2 ;;
+      --web-domain) WEB_DOMAIN=$2; shift 2 ;;
       --cert) ucert=$2; shift 2 ;;
       --multi-port) multi=yes; shift ;;
       --key) ukey=$2; shift 2 ;;
@@ -393,18 +400,19 @@ main() {
   PORT=$((10#$PORT))
   # Регистр и точка в конце не важны: vpn.Example.com. – это тот же vpn.example.com.
   local k
-  for k in SNI DOMAIN WS_DOMAIN HOST; do
+  for k in SNI DOMAIN WS_DOMAIN WEB_DOMAIN HOST; do
     [[ -z ${!k} ]] || { local v=${!k,,}; v=${v%.}; printf -v "$k" '%s' "$v"; }
   done
   PANEL_SSL=${PANEL_SSL,,}; protos=${protos,,}; protos=${protos// /}
   local re_host='^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+([A-Za-z]{2,63}|xn--[A-Za-z0-9-]{1,59})$'
-  for k in "$SNI" "$DOMAIN" "$WS_DOMAIN" "$HOST"; do
+  for k in "$SNI" "$DOMAIN" "$WS_DOMAIN" "$WEB_DOMAIN" "$HOST"; do
     [[ $k != *://* && $k != */* ]] || die "Нужно только имя, без https:// и без «/»: например vpn.example.com"
     [[ $k =~ ^[A-Za-z0-9.-]*$ ]] || die "Имя «$k» с не латинскими буквами не подойдёт: запишите его в виде punycode (xn--…), например через idn или в личном кабинете регистратора."
   done
   [[ -z $SNI || $SNI =~ $re_host ]] || die "--sni: нужно имя сайта, например dl.google.com"
   [[ -z $DOMAIN || $DOMAIN =~ $re_host ]] || die "--domain: нужно имя вашего домена, например vpn.example.com"
   [[ -z $WS_DOMAIN || $WS_DOMAIN =~ $re_host ]] || die "--ws-domain: нужно имя поддомена для WebSocket (CDN), например ws.example.com"
+  [[ -z $WEB_DOMAIN || $WEB_DOMAIN =~ $re_host ]] || die "--web-domain: нужно имя домена для портала и подписки (CDN), например panel.example.com"
   [[ -z $DOMAIN || $multi == no ]] || die "Свой домен работает только в режиме «всё на 443» – уберите --multi-port."
   [[ -z $HOST || $HOST =~ $re_host || $HOST =~ ^(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])(\.(25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])){3}$ ]] || die "--host: нужен IP (например 1.2.3.4) или домен"
   [[ $NAME =~ ^[A-Za-z0-9_.-]{1,32}$ ]] || die "Имя: латиница, цифры, _ . - (до 32 символов)."
@@ -417,9 +425,21 @@ main() {
   case $protos in
     all) PROTOS=("${DEFAULT_PROTOS[@]}") ;;
     minimal) PROTOS=(reality) ;;
-    *) IFS=, read -ra PROTOS <<<"$protos"
-       local x
-       for x in "${PROTOS[@]}"; do [[ " ${ALL_PROTOS[*]} " == *" $x "* ]] || die "Неизвестный протокол: $x. Доступны: ${ALL_PROTOS[*]}"; done ;;
+    *)
+      # Список через запятую; ключ all разворачивается в набор по умолчанию,
+      # поэтому можно писать, например, --protocols all,mtproto.
+      PROTOS=()
+      local x u
+      IFS=, read -ra _plist <<<"$protos"
+      for x in "${_plist[@]}"; do
+        if [[ $x == all ]]; then PROTOS+=("${DEFAULT_PROTOS[@]}")
+        elif [[ " ${ALL_PROTOS[*]} " == *" $x "* ]]; then PROTOS+=("$x")
+        else die "Неизвестный протокол: $x. Доступны: ${ALL_PROTOS[*]} или all"; fi
+      done
+      local -a _uniq=()
+      for u in "${PROTOS[@]}"; do [[ " ${_uniq[*]-} " == *" $u "* ]] || _uniq+=("$u"); done
+      PROTOS=("${_uniq[@]}")
+      ;;
   esac
   if [[ $multi == no && -d /etc/nginx ]] && grep -rqsE '^[[:space:]]*stream[[:space:]]*\{' /etc/nginx/nginx.conf /etc/nginx/conf.d /etc/nginx/sites-enabled /etc/nginx/streams-enabled 2>/dev/null; then
     die "В вашем nginx уже есть блок stream: установщик в режиме «всё на 443» не сможет с ним ужиться. Запустите с --multi-port или уберите свой блок."
@@ -473,6 +493,15 @@ main() {
   HOST=${HOST:-$(public_ip)}
   [[ -n $HOST ]] || die "Не удалось узнать внешний IP. Укажите его: --host 1.2.3.4"
 
+  # Клиентский веб-домен. По умолчанию — CDN-поддомен (--ws-domain), чтобы портал,
+  # панель и подписка жили за Cloudflare, а реальный IP не попадал в ссылки.
+  WEB_DOMAIN=${WEB_DOMAIN:-${WS_DOMAIN:-${DOMAIN:-$HOST}}}
+  WEB_DOMAIN=${WEB_DOMAIN,,}; WEB_DOMAIN=${WEB_DOMAIN%.}
+  # Веб можно вынести на отдельный хост только когда он не совпадает с --domain и не IP.
+  if [[ $WEB_DOMAIN != "$HOST" && $WEB_DOMAIN != "$DOMAIN" && $WEB_DOMAIN =~ $re_host ]]; then
+    SEPARATE_WEB=yes
+  fi
+
   # Маскировка: из флагов, по вопросу пользователю или стандартная.
   if [[ -n $DOMAIN ]]; then
     domain_points_here "$DOMAIN" || {
@@ -494,7 +523,7 @@ main() {
   elif ! sni_ok "$SNI"; then
     die "$SNI не отвечает по TLS 1.3 + HTTP/2 – REALITY с ним работать не будет. Выберите другой сайт."
   fi
-  say "Маскировка REALITY: ${B}$SNI${N}${DOMAIN:+ (панель и веб-интерфейс на домене $DOMAIN)}"
+  say "Маскировка REALITY: ${B}$SNI${N}${WEB_DOMAIN:+ (панель/кабинет/подписка через CDN: ${B}$WEB_DOMAIN${N})}"
   # Для режима «всё на 443» XHTTP и MTProto нужны свои сайты: nginx различает их по SNI.
   for s in "${SNI_CANDIDATES[@]}"; do
     [[ $s == "$SNI" ]] && continue
@@ -593,7 +622,7 @@ main() {
 
   # --- итог ---
   local panel_url links
-  local panel_host=${DOMAIN:-$HOST}
+  local panel_host=${WEB_DOMAIN:-$HOST}
   if [[ $SINGLE == yes ]]; then
     panel_url="https://$panel_host/${XUI_WEB_BASE_PATH#/}"
     panel_url="${panel_url%/}/"
@@ -610,6 +639,9 @@ main() {
   AWG_LINKS=$(grep '^vpn://' <<<"$links" || true)
   # MTProto слушает localhost, а клиенты приходят через nginx на 443.
   [[ $SINGLE == yes ]] && links=$(sed "s/^\(tg:\/\/proxy?\)\(.*\)port=${INNER[mtproto]}/\1\2port=443/" <<<"$links")
+  # tg:// по умолчанию не показываем: MTProto — прямой и легко детектируемый протокол,
+  # а ссылку часто расшаривают. Получить её можно явно: kit user link <имя> --all.
+  links=$(grep -v '^tg://' <<<"$links" || true)
   umask 077
   {
     echo "3X-UI KIT (3X-UI $XUI_VERSION) – данные для входа (файл виден только root)"
@@ -1095,18 +1127,22 @@ proto_mtproto() {
 
 # ---------- пользователи ----------
 
-# Один клиент 3X-UI на все подключения: общие трафик, лимиты и срок, одна подписка.
+# Первый клиент – сразу на устойчивых протоколах (REALITY + WS). Остальные протоколы
+# добавляются по запросу: kit user attach <имя> <протокол>.
 ensure_user() {
   local list me ids missing legacy
   list=$(api GET clients/list | jq -c 'if type == "array" then . else .clients end')
-  ids=$(non_awg_ids)
+  ids=$(core_ids)
+  if [[ $ids == "[]" ]]; then
+    warn "В наборе нет устойчивых подключений (REALITY/WebSocket) – первый пользователь получит все протоколы."
+    ids=$(non_awg_ids)
+  fi
   me=$(jq -c --arg e "$NAME" 'map(select(.email == $e))[0] // empty' <<<"$list")
   legacy=$(jq -r --arg p "$NAME-" 'map(select((.email | startswith($p)) and (.email | test("-awg[0-9]*$") | not))) | .[0].subId // empty' <<<"$list")
   if [[ -n $me ]]; then
     SUBID=$(jq -r '.subId' <<<"$me")
     missing=$(jq -c --argjson all "$ids" '$all - (.inboundIds // [])' <<<"$me")
     [[ $missing == "[]" ]] || api POST "clients/$NAME/attach" "$(jq -nc --argjson i "$missing" '{inboundIds: $i}')" >/dev/null
-    awg_attach "$NAME" "$SUBID"
   elif [[ -n $legacy ]]; then
     # Установка до kit 1.1: у каждого протокола свой клиент – оставляем как есть.
     SUBID=$legacy
@@ -1114,7 +1150,6 @@ ensure_user() {
     SUBID=$(rand_str 16 | tr 'A-Z' 'a-z')
     api POST clients/add "$(jq -nc --arg e "$NAME" --arg s "$SUBID" --argjson ids "$ids" \
       '{client: {email: $e, subId: $s, totalGB: 0, expiryTime: 0, limitIp: 0, enable: true, comment: "kit"}, inboundIds: $ids}')" >/dev/null
-    awg_attach "$NAME" "$SUBID"
   fi
 }
 
@@ -1125,6 +1160,10 @@ ensure_user() {
 # (subId в 3X-UI обязан быть уникальным) и теми же лимитами; kit-sub подмешивает её в Clash.
 awg_ids() { api GET inbounds/list | jq -r '[.[] | select(.protocol == "amneziawg") | .id] | sort | .[]'; }
 non_awg_ids() { api GET inbounds/list | jq -c '[.[] | select(.protocol != "amneziawg") | .id]'; }
+# Публичная подписка по умолчанию — только самые устойчивые протоколы:
+# REALITY (VLESS TCP) и WebSocket (VLESS/VMess через Cloudflare). Остальное
+# пользователю подключают по запросу: kit user attach <имя> <протокол>.
+core_ids() { api GET inbounds/list | jq -c '[.[] | select(.remark == "REALITY" or .remark == "VLESS-WS" or .remark == "VMess-WS") | .id]'; }
 
 awg_attach() { # имя subId [лимит-байт] [срок-мс] [устройств]
   local name=$1 sid=$2 total=${3:-0} exp=${4:-0} lim=${5:-0} n=1 id email have
@@ -1153,13 +1192,14 @@ write_kit_env() {
   {
     printf 'HOST=%q\n' "$HOST"
     printf 'DOMAIN=%q\n' "${DOMAIN:-}"
+    printf 'WEB_DOMAIN=%q\n' "${WEB_DOMAIN:-}"
     printf 'WS_DOMAIN=%q\n' "${WS_DOMAIN:-}"
     printf 'SUB_BASE=%q\n' "${SUB_URL%$SUBID}"
     printf 'SUB_PATH=%q\n' "$SUB_PATH"
     printf 'SUB_INTERNAL=%q\n' "${SUB_INTERNAL:-$SUB_PORT}"
     printf 'SINGLE=%q\n' "$SINGLE"
     printf 'MTPROTO_INNER=%q\n' "${INNER[mtproto]}"
-    printf 'PORTAL_DOMAIN=%q\n' "${DOMAIN:-$HOST}"
+    printf 'PORTAL_DOMAIN=%q\n' "${WEB_DOMAIN:-${DOMAIN:-$HOST}}"
     printf 'PORTAL_PORT=%q\n' "${INNER[portal]}"
   } >/etc/kit/kit.env
   chmod 600 /etc/kit/kit.env
@@ -1271,14 +1311,9 @@ EOF
   xhttp_sni=$(jq -r '.[] | select(.remark == "XHTTP" and .listen == "127.0.0.1") | (.streamSettings | if type == "string" then fromjson else . end).realitySettings.serverNames[0]' <<<"$list")
   mt_sni=$(jq -r '.[] | select(.protocol == "mtproto" and .listen == "127.0.0.1") | (.settings | if type == "string" then fromjson else . end).fakeTlsDomain' <<<"$list")
 
-  # Домен сервера никогда не должен попадать в stream map для REALITY, иначе браузеры не откроют сайт
-  if [[ -n $DOMAIN && $reality_sni == "$DOMAIN" ]]; then
-    reality_sni=""
-  fi
-  if [[ -n $DOMAIN && $xhttp_sni == "$DOMAIN" ]]; then
-    xhttp_sni=""
-  fi
-
+  # SNI веб-домена (Cloudflare) отдаёт кабинет, SNI основного домена — заглушку
+  # плюс пути протоколов (например Trojan ходит с SNI = --domain), остальное — заглушку.
+  #
   # Всё из базы панели попадает в конфиг nginx, поэтому чужая база (например, из копии)
   # не должна протащить туда лишние директивы: имена и пути проверяем строго.
   local n
@@ -1381,12 +1416,55 @@ EOF
     echo "}"
   } >/etc/nginx/kit-stream.conf
 
-  cat >/etc/nginx/conf.d/kit.conf <<NGX
-# Сгенерировано 3x-ui.sh (3X-UI KIT) – перезаписывается при повторном запуске.
+  # Заглушка-по-умолчанию нужна, только когда веб вынесен на отдельный домен.
+  # Иначе единственный сервер ловит всё (server_name _) и отдаёт кабинет, как раньше.
+  local web_server_name="_"
+  [[ $SEPARATE_WEB == yes ]] && web_server_name=$WEB_DOMAIN
+
+  {
+    echo "# Сгенерировано 3x-ui.sh (3X-UI KIT) – перезаписывается при повторном запуске."
+    echo "# Реальный IP клиента: за Cloudflare берём CF-Connecting-IP, иначе — из proxy_protocol."
+    echo "map \$http_cf_connecting_ip \$kit_client_ip {"
+    echo "    default \$http_cf_connecting_ip;"
+    echo "    \"\"      \$proxy_protocol_addr;"
+    echo "}"
+
+    if [[ $SEPARATE_WEB == yes ]]; then
+      cat <<NGX
+
+# 1) Заглушка: любой хост/SNI, кроме веб-домена и сайтов маскировки.
+#    Сюда же попадает обращение по голому IP — вместо VPN-кабинета обычный сайт.
 server {
     listen 127.0.0.1:${INNER[web]} ssl $ngx_listen_h2 proxy_protocol;
     $ngx_h2_directive
     server_name _;
+    ssl_certificate $CERT;
+    ssl_certificate_key $KEY;
+    ssl_protocols TLSv1.2 TLSv1.3;
+    set_real_ip_from 127.0.0.1;
+    real_ip_header proxy_protocol;
+    server_tokens off;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    absolute_redirect off;
+    access_log off;
+# Пути WebSocket/gRPC для протоколов, у которых SNI = основной домен (например Trojan).
+$locs
+    location / {
+        root /var/www/kit;
+        index index.html;
+    }
+}
+NGX
+    fi
+
+    cat <<NGX
+
+# 2) Веб-домен (Cloudflare Proxied): портал, панель, подписка и WebSocket/gRPC.
+server {
+    listen 127.0.0.1:${INNER[web]} ssl $ngx_listen_h2 proxy_protocol;
+    $ngx_h2_directive
+    server_name $web_server_name;
     ssl_certificate $CERT;
     ssl_certificate_key $KEY;
     ssl_protocols TLSv1.2 TLSv1.3;
@@ -1403,8 +1481,8 @@ $locs
         proxy_pass http://127.0.0.1:$sub_target;
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Real-IP \$kit_client_ip;
+        proxy_set_header X-Forwarded-For \$kit_client_ip;
         proxy_set_header X-Forwarded-Proto https;
     }
     location $panel_path {
@@ -1414,16 +1492,16 @@ $locs
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Real-IP \$kit_client_ip;
+        proxy_set_header X-Forwarded-For \$kit_client_ip;
         proxy_set_header X-Forwarded-Proto https;
     }
     location /sub/singbox {
         proxy_pass http://127.0.0.1:${INNER[portal]};
         proxy_http_version 1.1;
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Real-IP \$kit_client_ip;
+        proxy_set_header X-Forwarded-For \$kit_client_ip;
         proxy_set_header X-Forwarded-Proto https;
     }
     location / {
@@ -1432,72 +1510,13 @@ $locs
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
+        proxy_set_header X-Real-IP \$kit_client_ip;
+        proxy_set_header X-Forwarded-For \$kit_client_ip;
         proxy_set_header X-Forwarded-Proto https;
     }
 }
 NGX
-
-  if [[ -n $DOMAIN && -s /root/cert/ip/fullchain.pem && -s /root/cert/ip/privkey.pem ]]; then
-    cat >>/etc/nginx/conf.d/kit.conf <<NGX
-
-# Дополнительный блок для прямого доступа по IP
-server {
-    listen 127.0.0.1:${INNER[web]} ssl $ngx_listen_h2 proxy_protocol;
-    $ngx_h2_directive
-    server_name $HOST;
-    ssl_certificate /root/cert/ip/fullchain.pem;
-    ssl_certificate_key /root/cert/ip/privkey.pem;
-    ssl_protocols TLSv1.2 TLSv1.3;
-    set_real_ip_from 127.0.0.1;
-    real_ip_header proxy_protocol;
-    server_tokens off;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    absolute_redirect off;
-    access_log off;
-$locs
-    location $SUB_PATH {
-        proxy_pass http://127.0.0.1:$sub_target;
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-    location $panel_path {
-        proxy_pass https://127.0.0.1:$XUI_PANEL_PORT;
-        proxy_ssl_verify off;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-    location /sub/singbox {
-        proxy_pass http://127.0.0.1:${INNER[portal]};
-        proxy_http_version 1.1;
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-    location / {
-        proxy_pass http://127.0.0.1:${INNER[portal]};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-For \$proxy_protocol_addr;
-        proxy_set_header X-Forwarded-Proto https;
-    }
-}
-NGX
-  fi
+  } >/etc/nginx/conf.d/kit.conf
   grep -q 'kit-stream.conf' /etc/nginx/nginx.conf || echo 'include /etc/nginx/kit-stream.conf;' >>/etc/nginx/nginx.conf
   if ! nginx -t >/tmp/nginx-test.log 2>&1; then
     cat /tmp/nginx-test.log >&2
@@ -1527,7 +1546,7 @@ setup_subscription() {
     # Наружу смотрит kit-sub (подписка с учётом приложения), 3X-UI – только на 127.0.0.1.
     SUB_PORT=2096; SUB_INTERNAL=2097
     # Без subURI панель показывает ссылку на внутренний порт 2097, до которого снаружи не достучаться.
-    local host_sub=${DOMAIN:-$HOST}
+    local host_sub=${WEB_DOMAIN:-$HOST}
     local uri="https://$host_sub:$SUB_PORT$SUB_PATH"
     [[ $SINGLE == yes ]] && uri="https://$host_sub$SUB_PATH"
     upd=$(jq -c --arg path "$SUB_PATH" --argjson ip "$SUB_INTERNAL" --arg title "3X-UI KIT" --arg uri "$uri" '
@@ -1547,9 +1566,9 @@ setup_subscription() {
     wait_panel
   fi
   [[ $TRUSTED == yes ]] && install_kit_sub
-  if [[ $SINGLE == yes ]]; then SUB_URL="https://${DOMAIN:-$HOST}$SUB_PATH$SUBID"
-  elif [[ $TRUSTED == yes ]]; then SUB_URL="https://${DOMAIN:-$HOST}:$SUB_PORT$SUB_PATH$SUBID"; else SUB_URL="http://127.0.0.1:$SUB_PORT$SUB_PATH$SUBID"; fi
-  SUB_FETCH="$(if [[ $TRUSTED == yes ]]; then echo https; else echo http; fi)://${DOMAIN:-$HOST}:$SUB_PORT$SUB_PATH$SUBID"
+  if [[ $SINGLE == yes ]]; then SUB_URL="https://${WEB_DOMAIN:-$HOST}$SUB_PATH$SUBID"
+  elif [[ $TRUSTED == yes ]]; then SUB_URL="https://${WEB_DOMAIN:-$HOST}:$SUB_PORT$SUB_PATH$SUBID"; else SUB_URL="http://127.0.0.1:$SUB_PORT$SUB_PATH$SUBID"; fi
+  SUB_FETCH="$(if [[ $TRUSTED == yes ]]; then echo https; else echo http; fi)://${WEB_DOMAIN:-$HOST}:$SUB_PORT$SUB_PATH$SUBID"
 }
 
 # Юнит kit-sub: без root (DynamicUser), конфиг и сертификат – через LoadCredential.
@@ -1768,16 +1787,20 @@ usage() {
   cat <<EOF
 3X-UI со всеми протоколами одной командой
 
-  --protocols all     all (по умолчанию – всё, кроме WireGuard), minimal (только REALITY)
+  --protocols all     all (по умолчанию – всё, кроме WireGuard и MTProto), minimal (только REALITY)
                       или список через запятую: reality,hy2,xhttp,ws,trojan,vmess,ss,tuic,wg,awg,awg3,mtproto
-                      (обычный WireGuard работает нестабильно – включайте его, только если сервер и
-                      пользователи за границей)
+                      Ключ all в списке разворачивается в набор по умолчанию, например
+                      --protocols all,mtproto добавит Telegram-прокси. Обычный WireGuard работает
+                      нестабильно, а MTProto легко распознаётся ТСПУ – включайте их осознанно.
   --port 443          порт REALITY (TCP) и Hysteria2 (UDP), по умолчанию 443
   --sni сайт          сайт для маскировки REALITY (по умолчанию подбирается сам)
-  --domain домен      свой домен: панель, личный кабинет и подписки работают на этом домене
-                      с сертификатом Let's Encrypt. A-запись должна вести на этот сервер, порт 80 свободен.
-  --ws-domain домен   поддомен для WebSocket (VMess/VLESS) через Cloudflare CDN/прокси
-                      (например, ws.example.com; основной домен остаётся для REALITY/Trojan)
+  --domain домен      свой домен для REALITY (self-steal) и сайта-заглушки: чужой гость видит
+                      обычный сайт, а не VPN-кабинет. A-запись ведёт на этот сервер (DNS Only), порт 80 свободен.
+  --ws-domain домен   поддомен для WebSocket (VMess/VLESS) через Cloudflare (Proxied,
+                      SSL/TLS = Full): например ws.example.com
+  --web-domain домен  домен для портала, панели и подписки через Cloudflare (Proxied).
+                      По умолчанию совпадает с --ws-domain. Отдельный поддомен позволяет
+                      отдавать кабинет только за CDN, а по IP и основному домену — заглушку.
   --panel-ssl ip|none сертификат панели: ip – Let's Encrypt на IP (нужен порт 80),
                       none – панель только через SSH-туннель (по умолчанию выбирается сам)
   --cert файл --key файл  свой сертификат вместо Let's Encrypt;

@@ -576,6 +576,9 @@ func FixWSLink(link, wsDomain string) string {
 		if strings.ToLower(netVal) == "ws" {
 			j["add"] = wsDomain
 			j["host"] = wsDomain
+			// Cloudflare проксирует только 443/2053/2083/2087/2096/8443.
+			// Ставим 443, чтобы клиент не ушёл на внутренний порт origin напрямую.
+			j["port"] = 443
 			if tlsVal, ok := j["tls"].(string); ok && (tlsVal == "tls" || tlsVal == "reality") {
 				j["sni"] = wsDomain
 			}
@@ -595,11 +598,9 @@ func FixWSLink(link, wsDomain string) string {
 		}
 		q := u.Query()
 		if strings.ToLower(q.Get("type")) == "ws" {
-			port := u.Port()
-			if port == "" {
-				port = "443"
-			}
-			u.Host = fmt.Sprintf("%s:%s", wsDomain, port)
+			// Через Cloudflare доступен только 443 — не оставляем исходный порт,
+			// иначе клиент пойдёт мимо CDN прямо на origin.
+			u.Host = fmt.Sprintf("%s:443", wsDomain)
 			q.Set("host", wsDomain)
 			sec := strings.ToLower(q.Get("security"))
 			if sec == "tls" || sec == "reality" {
@@ -618,11 +619,7 @@ func FixWSLink(link, wsDomain string) string {
 		}
 		q := u.Query()
 		if strings.ToLower(q.Get("type")) == "ws" {
-			port := u.Port()
-			if port == "" {
-				port = "443"
-			}
-			u.Host = fmt.Sprintf("%s:%s", wsDomain, port)
+			u.Host = fmt.Sprintf("%s:443", wsDomain)
 			q.Set("host", wsDomain)
 			sec := strings.ToLower(q.Get("security"))
 			if sec == "tls" || sec == "reality" {
