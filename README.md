@@ -123,6 +123,9 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Qislord/3X-UI_KIT_SING_BOX/m
 **REALITY + VLESS-WS + VMess-WS**, кабинет/панель/подписка уходят за Cloudflare, а по IP и по
 `example.com` отдаётся сайт-заглушка.
 
+> Про домены: `--domain` — **серое** облако (DNS only), `--ws-domain` — **оранжевое** (Proxied).
+> Не перепутайте — таблица чуть ниже, в разделе [«Что означают параметры доменов»](#что-означают-параметры-доменов).
+
 > [!WARNING]
 > Без `--protocols` установщик поставит почти все протоколы (кроме WireGuard и MTProto) и **откроет
 > их порты**, даже если никто ими не пользуется — а это лишние «зацепки» для блокировки IP. Для
@@ -149,6 +152,20 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Qislord/3X-UI_KIT_SING_BOX/m
   - трафик идёт через сеть Cloudflare — ТСПУ/DPI видят только адреса Cloudflare.
 - **`--web-domain wc.example.com`** (необязательный) — отдельный CDN-домен для панели,
   кабинета и подписки. Если не указан, используется `--ws-domain`.
+
+Коротко — какой флаг куда указывает и как включить облако:
+
+| Флаг | DNS-запись | Облако Cloudflare | Что делает |
+|---|---|---|---|
+| `--domain example.com` | A → IP сервера | **DNS only** (серое) | сайт-заглушка + прямые протоколы (REALITY, Trojan-gRPC) |
+| `--ws-domain ws.example.com` | A → IP сервера | **Proxied** (оранжевое), SSL **Full** | VMess-WS/VLESS-WS + панель, кабинет и подписка |
+| `--web-domain wc.example.com` (опц.) | A → IP сервера | **Proxied** (оранжевое), SSL **Full** | панель, кабинет и подписка на отдельном домене |
+
+> [!IMPORTANT]
+> Обе A-записи указывают на **один и тот же IP сервера** — различие только в переключателе «облако».
+> Если перепутать: при оранжевом `example.com` **не заработает REALITY** (клиенты уйдут в Cloudflare,
+> а он REALITY не проксирует), а при сером `ws.example.com` WebSocket пойдёт напрямую на ваш IP и
+> весь смысл CDN потеряется.
 
 > [!NOTE]
 > **Прямые протоколы (REALITY/Hysteria2/TUIC/…) по-прежнему подключаются к реальному IP** — их

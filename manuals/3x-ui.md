@@ -76,6 +76,12 @@ bash <(curl -fsSL https://raw.githubusercontent.com/Qislord/3X-UI_KIT_SING_BOX/m
 > Без `--domain`/`--ws-domain` установщик либо спросит о маскировке в терминале, либо поставит
 > по IP (тогда Cloudflare не используется). Для «тихого» сервера указывайте оба домена.
 
+> [!IMPORTANT]
+> В Cloudflare: `--domain example.com` — **DNS only** (серое облако), `--ws-domain ws.example.com` —
+> **Proxied** (оранжевое, SSL **Full**). Обе A-записи ведут на IP сервера. На `example.com` —
+> заглушка и прямые протоколы (REALITY/Trojan), на `ws.example.com` — WebSocket и
+> панель/кабинет/подписка. Не проксируйте `--domain` — REALITY через Cloudflare не работает.
+
 Через пару минут скрипт покажет всё нужное:
 
 ![Результат установки 3X-UI](assets/script-3x-ui.svg)
