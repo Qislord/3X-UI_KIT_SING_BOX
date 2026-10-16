@@ -21,6 +21,7 @@ kit_ref_raw() { echo "https://raw.githubusercontent.com/$KIT_REPO/v$1"; }
 XUI_ENV=/etc/x-ui/install-result.env
 KIT_ENV=/etc/kit/kit.env
 KIT_LATEST=/etc/kit/latest-version
+PORTAL_DB=/etc/kit/portal.db
 
 if [[ -t 1 ]]; then
   G=$'\e[32m'; Y=$'\e[33m'; R=$'\e[31m'; B=$'\e[1m'; D=$'\e[2m'; N=$'\e[0m'
@@ -131,6 +132,27 @@ need_val() { [[ -n ${2-} ]] || die "У параметра $1 нет значен
 human() { # байты → «1.2 ГБ»
   awk -v b="$1" 'BEGIN { split("Б КБ МБ ГБ ТБ", u, " "); i = 1; while (b >= 1024 && i < 5) { b /= 1024; i++ }
     printf (i == 1 ? "%d %s" : "%.1f %s"), b, u[i] }'
+}
+
+# Публичный IP этого сервера (для правки HOST при восстановлении).
+public_ip() {
+  local ip u
+  for u in https://api.ipify.org https://ifconfig.me/ip https://ipv4.icanhazip.com; do
+    ip=$(curl -4 -fsS -m 6 "$u" 2>/dev/null | tr -d '[:space:]') || true
+    [[ $ip =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && { echo "$ip"; return; }
+  done
+  ip -4 route get 1.1.1.1 2>/dev/null | awk '{for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}'
+}
+
+# Снимок SQLite через backup API: база может работать (WAL), копия остаётся целой.
+sqlite_snapshot() { # файл-источник файл-назначение
+  python3 - "$1" "$2" <<'PY' || return 1
+import sqlite3, sys
+src = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+dst = sqlite3.connect(sys.argv[2])
+src.backup(dst)
+dst.close(); src.close()
+PY
 }
 
 sub_url() { echo "${SUB_BASE}$1"; }
@@ -817,9 +839,49 @@ check_system() {
   fi
 }
 
+# Согласованность: аккаунты кабинета ссылаются на subId, которые есть в панели;
+# настройки панели совпадают с install-result.env (после кривого restore бывает рассинхрон).
+check_panel() {
+  local pdb=${PORTAL_DB:-/etc/kit/portal.db} psubs panel_subs missing
+  if [[ -f $pdb ]]; then
+    psubs=$(python3 - "$pdb" <<'PY' 2>/dev/null || true
+import sqlite3, sys
+con = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
+for (s,) in con.execute("select sub_id from users where sub_id is not null and sub_id != ''"):
+    print(s)
+PY
+)
+    if [[ -n $psubs ]]; then
+      panel_subs=$(clients 2>/dev/null | jq -r '.[].subId // empty' 2>/dev/null | sort -u || true)
+      if [[ -z $panel_subs ]]; then
+        c_info "аккаунты кабинета есть, но список из панели не получен — проверка связей пропущена"
+      else
+        missing=$(comm -23 <(sort -u <<<"$psubs") <(printf '%s\n' "$panel_subs") 2>/dev/null | tr '\n' ' ' || true)
+        if [[ -n ${missing// /} ]]; then
+          c_bad "" "в кабинете есть подписки, которых нет в панели:$missing — аккаунты не получат ссылки (перенос: kit restore --import)"
+        else
+          c_ok "аккаунты кабинета связаны с панелью"
+        fi
+      fi
+    fi
+  fi
+
+  local all wp wbp
+  all=$(api POST setting/all 2>/dev/null || true)
+  [[ -n $all ]] || return 0
+  wp=$(jq -r '.webPort // empty' <<<"$all" 2>/dev/null || true)
+  wbp=$(jq -r '.webBasePath // empty' <<<"$all" 2>/dev/null || true)
+  if [[ -n $wp && -n ${XUI_PANEL_PORT:-} && $wp != "$XUI_PANEL_PORT" ]]; then
+    c_warn "порт панели в настройках ($wp) не совпадает с install-result.env ($XUI_PANEL_PORT) — kit/портал могут не видеть панель"
+  fi
+  if [[ -n $wbp && -n ${XUI_WEB_BASE_PATH:-} && ${wbp#/} != "${XUI_WEB_BASE_PATH#/}" ]]; then
+    c_warn "путь панели в настройках ($wbp) не совпадает с install-result.env (/$XUI_WEB_BASE_PATH)"
+  fi
+}
+
 run_checks() {
   CHECK_BAD=0; CHECK_WARN=0; CHECK_FIX=()
-  check_services; check_versions; check_cert; check_exposure; check_subscription; check_masking; check_system
+  check_services; check_versions; check_cert; check_exposure; check_subscription; check_masking; check_panel; check_system
 }
 
 cmd_check() {
@@ -933,29 +995,67 @@ cmd_fix() {
 
 # ---------- резервная копия ----------
 
-# Что входит в копию: база панели (пользователи,
-# ключи, подключения), настройки kit и kit-sub, nginx, сайт-заглушка, свои сертификаты.
-# Сертификаты Let's Encrypt (на IP и на свой домен) не берём: на новом сервере он выпускается заново.
-BACKUP_PATHS=(/etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json /etc/kit/portal.db
+# Что входит в копию. Базы берём снимком SQLite, остальное — как есть.
+# Для ПЕРЕНОСА на новый сервер важны backup/users.json и backup/portal_accounts.json
+# (+ portal.db): домены, IP, сертификаты и nginx не переносятся — их создаёт установщик.
+# Сертификаты Let's Encrypt (на IP и на домен) не берём: на новом сервере выпускаются заново.
+BACKUP_PATHS=(/etc/x-ui/install-result.env /etc/kit/kit.env /etc/kit-sub/config.json
   /etc/nginx/kit-stream.conf /etc/nginx/conf.d/kit.conf /var/www/kit /root/cert/self /root/cert/custom /root/3x-ui.txt)
 
+# Портативный список пользователей (email, subId, лимиты, срок, вкл/выкл, протоколы).
+backup_users_json() { # путь-куда
+  local inb cl
+  inb=$(api GET inbounds/list 2>/dev/null || echo '[]')
+  cl=$(clients 2>/dev/null || echo '[]')
+  [[ -n $cl ]] || cl='[]'
+  jq -c --argjson ib "${inb:-[]}" '
+    map(select(.subId != null and ((.email // "") | test("-awg[0-9]*$|-mtproto$") | not)))
+    | map({email, subId,
+           totalGB: (.totalGB // 0),
+           expiryTime: (.expiryTime // 0),
+           limitIp: (.limitIp // 0),
+           enable: (.enable // false),
+           protocols: [ (.inboundIds // [])[] as $id | ($ib[] | select(.id == $id) | .remark) ]})' <<<"$cl" >"$1"
+}
+
+# Портативные аккаунты кабинета (логин + хеш пароля, sub_id, токен).
+backup_portal_accounts() { # путь-куда
+  PORTAL_DB=$PORTAL_DB python3 - "$1" <<'PY' || echo '[]' >"$1"
+import json, os, sqlite3, sys
+db = os.environ.get("PORTAL_DB", "/etc/kit/portal.db")
+rows = []
+if os.path.exists(db):
+    con = sqlite3.connect("file:%s?mode=ro" % db, uri=True)
+    con.row_factory = sqlite3.Row
+    for r in con.execute("select username, password_hash, salt, sub_id, sub_token, is_active, created_at, updated_at from users"):
+        rows.append({k: r[k] for k in r.keys()})
+    con.close()
+json.dump(rows, open(sys.argv[1], "w"), ensure_ascii=False)
+PY
+}
+
 cmd_backup() {
-  local out tmp p ssl=none c
+  local out tmp p ssl=none c users_n acct_n
   out=/root/kit-backup-$(date +%Y%m%d-%H%M).tar.gz
   tmp=$(mktemp -d)
   # shellcheck disable=SC2064 # путь подставляем сразу: при выходе локальной переменной уже нет
   trap "rm -rf -- '$tmp'" EXIT
-  install -d -m 700 "$tmp/etc/x-ui"
-  # Снимок базы средствами SQLite: панель продолжает работать, копия целая.
-  python3 - /etc/x-ui/x-ui.db "$tmp/etc/x-ui/x-ui.db" <<'PY' || die "Не удалось скопировать базу панели."
-import sqlite3, sys
-src = sqlite3.connect("file:%s?mode=ro" % sys.argv[1], uri=True)
-dst = sqlite3.connect(sys.argv[2])
-src.backup(dst)
-dst.close(); src.close()
-PY
+  install -d -m 700 "$tmp/etc/x-ui" "$tmp/etc/kit" "$tmp/backup"
+
+  # Базы — снимком SQLite (могут быть в WAL и работать).
+  if [[ -f /etc/x-ui/x-ui.db ]]; then sqlite_snapshot /etc/x-ui/x-ui.db "$tmp/etc/x-ui/x-ui.db" || die "Не удалось снять копию базы панели."; fi
+  [[ -f $PORTAL_DB ]] && sqlite_snapshot "$PORTAL_DB" "$tmp/etc/kit/portal.db" || true
+
+  # Окружение (для режима --full на тот же сервер).
   for p in "${BACKUP_PATHS[@]}"; do if [[ -e $p ]]; then cp -a --parents "$p" "$tmp"; fi; done
-  # Какой сертификат был у панели и подписки – новый сервер должен получить такой же.
+
+  # Портативные данные для переноса (--import).
+  backup_users_json "$tmp/backup/users.json" || echo '[]' >"$tmp/backup/users.json"
+  backup_portal_accounts "$tmp/backup/portal_accounts.json"
+  users_n=$(jq 'length' "$tmp/backup/users.json" 2>/dev/null || echo 0)
+  acct_n=$(jq 'length' "$tmp/backup/portal_accounts.json" 2>/dev/null || echo 0)
+
+  # Какой сертификат был у панели и подписки.
   c=$(jq -r '.cert // empty' /etc/kit-sub/config.json 2>/dev/null || true)
   [[ -z $c && -f /etc/nginx/conf.d/kit.conf ]] && c=$(awk '$1 == "ssl_certificate" {sub(/;$/, "", $2); print $2; exit}' /etc/nginx/conf.d/kit.conf)
   case $c in
@@ -964,68 +1064,248 @@ PY
   esac
   {
     printf 'BACKUP_KIT_VERSION=%q\n' "$KIT_VERSION"
-    printf 'BACKUP_HOST=%q\n' "$HOST"
+    printf 'BACKUP_HOST=%q\n' "${HOST:-}"
+    printf 'BACKUP_DOMAIN=%q\n' "${DOMAIN:-}"
+    printf 'BACKUP_WS_DOMAIN=%q\n' "${WS_DOMAIN:-}"
+    printf 'BACKUP_WEB_DOMAIN=%q\n' "${WEB_DOMAIN:-}"
     printf 'BACKUP_SSL=%q\n' "$ssl"
     printf 'BACKUP_DATE=%q\n' "$(date +%F)"
-  } >"$tmp/kit-backup.env"
+    printf 'BACKUP_USERS=%q\n' "$users_n"
+  } >"$tmp/backup/manifest.env"
+
   (umask 077; tar -czf "$out" -C "$tmp" .)
   chmod 600 "$out"
   say "Резервная копия: ${B}$out${N} ($(du -h "$out" | cut -f1))"
+  echo "  для переноса: пользователей ${B}$users_n${N}, аккаунтов кабинета ${B}$acct_n${N}"
   echo
   echo "В ней ключи и пароли от сервера, храните её как пароль. Скачать к себе (на компьютере):"
   echo "  ${B}scp root@$HOST:$out .${N}"
+  echo "  ${D}Перенос на новый сервер: kit restore --import <архив>${N}"
   echo
 }
 
 cmd_restore() {
-  local archive="${1:-}"
-  [[ -z $archive ]] && die "Укажите путь к архиву бэкапа: kit restore /путь/к/kit-backup-XXXX.tar.gz"
+  local mode=import archive="" host="" domain="" wsdomain=""
+  while [[ $# -gt 0 ]]; do
+    case $1 in
+      --import) mode=import; shift ;;
+      --full) mode=full; shift ;;
+      --check | --dry-run | -n) mode=check; shift ;;
+      --host) need_val "$@"; host=$2; shift 2 ;;
+      --domain) need_val "$@"; domain=$2; shift 2 ;;
+      --ws-domain) need_val "$@"; wsdomain=$2; shift 2 ;;
+      -*) die "kit restore [--import|--full|--check] <архив> [--host IP] [--domain d] [--ws-domain w]" ;;
+      *) archive=$1; shift ;;
+    esac
+  done
+  [[ -n $archive ]] || die "Укажите путь к архиву: kit restore [--import|--full|--check] /root/kit-backup-XXXX.tar.gz"
   [[ -f $archive ]] || die "Файл бэкапа не найден: $archive"
-
-  say "Восстановление данных из ${B}$archive${N}..."
+  if [[ $mode == full && ( -n $domain || -n $wsdomain ) ]]; then
+    die "Смена домена несовместима с --full (kit.env и nginx разъедутся). Для нового домена используйте --import."
+  fi
 
   local tmp
   tmp=$(mktemp -d)
   # shellcheck disable=SC2064
   trap "rm -rf -- '$tmp'" EXIT
+  tar -xzf "$archive" -C "$tmp" || die "Не удалось распаковать архив (файл повреждён?)."
 
-  tar -xzf "$archive" -C "$tmp" || die "Не удалось распаковать архив бэкапа."
+  case $mode in
+    check) restore_check "$tmp" ;;
+    full) restore_full "$tmp" "$host" ;;
+    import)
+      [[ -f "$tmp/backup/users.json" ]] || die "В архиве нет backup/users.json (старый формат). Сделайте свежий 'kit backup' на старом сервере; восстановить на тот же сервер: kit restore --full."
+      restore_import "$tmp"
+      ;;
+  esac
+}
 
-  # Останавливаем службы
-  say "Останавливаю службы панели и портала..."
+# Показать содержимое архива, ничего не меняя.
+restore_check() {
+  local tmp=$1
+  local man="$tmp/backup/manifest.env" users="$tmp/backup/users.json" accts="$tmp/backup/portal_accounts.json"
+  echo "${B}Содержимое архива${N}"
+  if [[ -f $man ]]; then
+    # shellcheck disable=SC1090
+    ( . "$man"
+      echo "  версия kit:    ${BACKUP_KIT_VERSION:-?}"
+      echo "  дата:          ${BACKUP_DATE:-?}"
+      echo "  старый HOST:   ${BACKUP_HOST:-?}"
+      echo "  домены:        ${BACKUP_DOMAIN:-–} / ${BACKUP_WS_DOMAIN:-–} / ${BACKUP_WEB_DOMAIN:-–}"
+      echo "  сертификат:    ${BACKUP_SSL:-none}"
+      echo "  пользователей: ${BACKUP_USERS:-0}" )
+  else
+    echo "  manifest.env нет — архив старого формата"
+  fi
+  [[ -f $users ]] && echo "  users.json:    $(jq 'length' "$users" 2>/dev/null || echo 0) записей" || echo "  users.json:    нет"
+  [[ -f $accts ]] && echo "  аккаунты:      $(jq 'length' "$accts" 2>/dev/null || echo 0)" || echo "  аккаунты:      нет"
+  echo
+  echo "${D}--import (по умолчанию): переносит только пользователей и аккаунты кабинета."
+  echo "--full: восстанавливает и окружение (только тот же сервер/домен).${N}"
+}
+
+# Перенос данных на НОВЫЙ сервер: пользователи + аккаунты кабинета. Окружение не трогаем.
+restore_import() {
+  local tmp=$1
+  local users="$tmp/backup/users.json" acct="$tmp/backup/portal_accounts.json"
+  api GET inbounds/list >/dev/null || die "Панель недоступна. Сначала установите сервер этим же скриптом, затем повторите."
+  local inb; inb=$(api GET inbounds/list)
+
+  local created=0 updated=0 failed=0
+  local u email sid total exp lim enable prots ids has_awg rec have_ids missing_ids
+  while IFS= read -r u; do
+    email=$(jq -r '.email // empty' <<<"$u")
+    [[ -n $email ]] || continue
+    sid=$(jq -r '.subId // empty' <<<"$u")
+    total=$(jq -r '.totalGB // 0' <<<"$u")
+    exp=$(jq -r '.expiryTime // 0' <<<"$u")
+    lim=$(jq -r '.limitIp // 0' <<<"$u")
+    enable=$(jq -r '.enable // false' <<<"$u")
+    prots=$(jq -c '.protocols // []' <<<"$u")
+    has_awg=$(jq -r '([.protocols[]?] | any(. == "AmneziaWG" or . == "AmneziaWG-3.1"))' <<<"$u")
+
+    ids=$(jq -nc --argjson ib "$inb" --argjson p "$prots" \
+      '[ $ib[] | select(.protocol != "amneziawg") | select(.remark as $r | $p | index($r)) | .id ]')
+    [[ $ids == "[]" ]] && ids=$(core_ids)
+    [[ $ids == "[]" ]] && ids=$(non_awg_ids)
+
+    if rec=$(client "$email" 2>/dev/null) && [[ -n $rec ]]; then
+      update_user "$email" ".totalGB = \$t | .expiryTime = \$x | .limitIp = \$l | .enable = \$e" \
+        --argjson t "$total" --argjson x "$exp" --argjson l "$lim" --argjson e "$enable" >/dev/null 2>&1 || true
+      sid=$(jq -r '.subId // empty' <<<"$rec")
+      # До-привязать протоколы, которых у пользователя ещё нет.
+      have_ids=$(jq -c '.inboundIds // []' <<<"$rec")
+      missing_ids=$(jq -nc --argjson all "$ids" --argjson have "$have_ids" '$all - $have')
+      [[ $missing_ids != "[]" ]] && api POST "clients/$email/attach" "$(jq -nc --argjson i "$missing_ids" '{inboundIds: $i}')" >/dev/null 2>&1 || true
+      updated=$((updated + 1))
+    else
+      [[ -n $sid ]] || sid=$(rand_id)
+      if api POST clients/add "$(jq -nc --arg e "$email" --arg s "$sid" --argjson t "$total" --argjson x "$exp" \
+            --argjson l "$lim" --argjson en "$enable" --argjson i "$ids" \
+            '{client: {email: $e, subId: $s, totalGB: $t, expiryTime: $x, limitIp: $l, enable: $en, comment: "kit"}, inboundIds: $i}')" >/dev/null; then
+        created=$((created + 1))
+      else
+        failed=$((failed + 1)); warn "не удалось создать пользователя $email"; continue
+      fi
+    fi
+    [[ $has_awg == true ]] && awg_attach "$email" "$sid" "$total" "$exp" "$lim"
+  done < <(jq -c '.[]' "$users")
+
+  # Аккаунты кабинета: логин/пароль прежние, sub_id — от нового клиента.
+  local map_sub
+  map_sub=$(clients 2>/dev/null | jq -c '[.[] | select(.subId != null) | {(.email): .subId}] | add // {}' 2>/dev/null || true)
+  [[ -n $map_sub ]] || map_sub='{}'
+  import_portal_accounts "$acct" "$map_sub"
+
+  # Чего не хватает на новом сервере.
+  local want have missing
+  want=$(jq -r '[.[].protocols[]?] | unique | .[]' "$users" 2>/dev/null | sort -u || true)
+  have=$(jq -r '[.[].remark] | unique | .[]' <<<"$inb" 2>/dev/null | sort -u || true)
+  missing=$(comm -23 <(printf '%s\n' "$want") <(printf '%s\n' "$have") 2>/dev/null | tr '\n' ' ' || true)
+
+  echo
+  say "Перенос завершён: ${G}создано $created${N}, обновлено $updated$( ((failed)) && echo ", ошибок $failed" )."
+  echo "  Пароли кабинета и лимиты сохранены. Домены/сертификаты/nginx не затронуты."
+  echo "  ${Y}Ссылки изменились (новый домен) — раздайте пользователям новую подписку.${N}"
+  [[ -n ${missing// /} ]] && warn "на новом сервере нет протоколов:$missing — перенесённым пользователям они не выданы. Добавьте их (см. README) и повторите 'kit restore --import'."
+  echo
+}
+
+# Влить аккаунты кабинета (хеш+соль пароля сохраняются — старый пароль работает).
+import_portal_accounts() { # json-аккаунты json-map(email→subId)
+  local acct=$1 map=$2
+  [[ -f $acct ]] || { warn "нет backup/portal_accounts.json — аккаунты кабинета не перенесены"; return; }
+  PORTAL_DB=$PORTAL_DB python3 - "$acct" "$map" <<'PY' || warn "не удалось перенести аккаунты кабинета"
+import json, os, sqlite3, sys
+db = os.environ.get("PORTAL_DB", "/etc/kit/portal.db")
+accounts = json.load(open(sys.argv[1]))
+m = json.loads(sys.argv[2]) if sys.argv[2].strip() else {}
+con = sqlite3.connect(db, timeout=10)
+con.execute("PRAGMA busy_timeout=5000")
+for a in accounts:
+    u = a.get("username")
+    if not u:
+        continue
+    sub = m.get(u) or a.get("sub_id") or ""
+    vals = (u, a["password_hash"], a["salt"], sub, a["sub_token"], a.get("is_active", 1),
+            a.get("created_at", 0), a.get("updated_at", 0))
+    try:
+        con.execute(
+            "INSERT INTO users (username,password_hash,salt,sub_id,sub_token,is_active,created_at,updated_at)"
+            " VALUES (?,?,?,?,?,?,?,?)"
+            " ON CONFLICT(username) DO UPDATE SET password_hash=excluded.password_hash, salt=excluded.salt,"
+            " sub_id=excluded.sub_id, sub_token=excluded.sub_token, is_active=excluded.is_active, updated_at=excluded.updated_at", vals)
+    except sqlite3.IntegrityError:
+        cur = con.execute("UPDATE users SET password_hash=?, salt=?, sub_id=?, is_active=? WHERE username=?",
+                          (a["password_hash"], a["salt"], sub, a.get("is_active", 1), u))
+        if cur.rowcount == 0:  # конфликт по sub_token у нового логина — выдаём новый токен
+            import secrets, string
+            tok = "".join(secrets.choice(string.ascii_letters + string.digits) for _ in range(32))
+            con.execute("INSERT INTO users (username,password_hash,salt,sub_id,sub_token,is_active,created_at,updated_at)"
+                        " VALUES (?,?,?,?,?,?,?,?)",
+                        (u, a["password_hash"], a["salt"], sub, tok, a.get("is_active", 1),
+                         a.get("created_at", 0), a.get("updated_at", 0)))
+con.commit(); con.close()
+PY
+}
+
+# Восстановление окружения на ТОТ ЖЕ сервер/домен (аварийное).
+restore_full() {
+  local tmp=$1 host=$2
+  local man="$tmp/backup/manifest.env"
+  warn "--full восстанавливает окружение. Домен и IP должны совпадать с бэкапом, иначе используйте --import."
+  if [[ -f $man ]]; then
+    local b_kit b_dom
+    b_kit=$( . "$man" 2>/dev/null; echo "${BACKUP_KIT_VERSION:-}" )
+    b_dom=$( . "$man" 2>/dev/null; echo "${BACKUP_DOMAIN:-}" )
+    [[ -n $b_kit && $b_kit != "$KIT_VERSION" ]] && warn "бэкап сделан на kit $b_kit, у вас $KIT_VERSION"
+    [[ -n $b_dom && -n ${DOMAIN:-} && $b_dom != "$DOMAIN" ]] && warn "в бэкапе домен $b_dom, а сейчас $DOMAIN — для смены домена нужен --import"
+  fi
+
+  say "Останавливаю службы..."
   systemctl stop x-ui kit-portal 2>/dev/null || true
 
-  # Восстанавливаем базу 3X-UI
   if [[ -f "$tmp/etc/x-ui/x-ui.db" ]]; then
     install -d -m 700 /etc/x-ui
     cp -f "$tmp/etc/x-ui/x-ui.db" /etc/x-ui/x-ui.db
+    rm -f /etc/x-ui/x-ui.db-wal /etc/x-ui/x-ui.db-shm
     chmod 600 /etc/x-ui/x-ui.db
-    say "База панели 3X-UI (/etc/x-ui/x-ui.db) успешно восстановлена."
+    python3 -c 'import sqlite3,sys;print(sqlite3.connect(sys.argv[1]).execute("PRAGMA integrity_check").fetchone()[0])' /etc/x-ui/x-ui.db 2>/dev/null | grep -qi '^ok' \
+      || die "База панели повреждена (integrity_check не ok) — восстановление остановлено."
+    say "база панели восстановлена"
   fi
-
-  # Восстанавливаем базу личного кабинета (пользователи, пароли, токены)
   if [[ -f "$tmp/etc/kit/portal.db" ]]; then
     install -d -m 700 /etc/kit
     cp -f "$tmp/etc/kit/portal.db" /etc/kit/portal.db
+    rm -f /etc/kit/portal.db-wal /etc/kit/portal.db-shm
     chmod 600 /etc/kit/portal.db
-    say "База личного кабинета (/etc/kit/portal.db) успешно восстановлена."
+    say "база кабинета восстановлена"
   fi
 
-  # Восстанавливаем файлы конфигурации и памятку
-  for f in etc/kit/kit.env etc/kit-sub/config.json root/3x-ui.txt; do
-    if [[ -f "$tmp/$f" ]]; then
-      cp -f "$tmp/$f" "/$f" 2>/dev/null || true
-    fi
+  local f
+  for f in etc/x-ui/install-result.env etc/kit/kit.env etc/kit-sub/config.json root/3x-ui.txt; do
+    if [[ -f "$tmp/$f" ]]; then install -d -m 700 "$(dirname "/$f")"; cp -f "$tmp/$f" "/$f"; fi
   done
+  chmod 600 /etc/x-ui/install-result.env /etc/kit/kit.env 2>/dev/null || true
+  [[ -f "$tmp/etc/nginx/kit-stream.conf" ]] && cp -f "$tmp/etc/nginx/kit-stream.conf" /etc/nginx/kit-stream.conf
+  if [[ -f "$tmp/etc/nginx/conf.d/kit.conf" ]]; then install -d /etc/nginx/conf.d; cp -f "$tmp/etc/nginx/conf.d/kit.conf" /etc/nginx/conf.d/kit.conf; fi
+  [[ -d "$tmp/var/www/kit" ]] && { install -d /var/www/kit; cp -a "$tmp/var/www/kit/." /var/www/kit/ 2>/dev/null || true; }
+  [[ -d "$tmp/root/cert/self" ]] && { install -d -m 700 /root/cert/self; cp -a "$tmp/root/cert/self/." /root/cert/self/ 2>/dev/null || true; }
+  [[ -d "$tmp/root/cert/custom" ]] && { install -d -m 700 /root/cert/custom; cp -a "$tmp/root/cert/custom/." /root/cert/custom/ 2>/dev/null || true; }
+  chmod 600 /root/cert/*/privkey.pem 2>/dev/null || true
 
-  # Запускаем службы
-  say "Запускаю службы..."
+  # HOST под текущий сервер: в бэкапе остался старый IP.
+  local newhost=${host:-}
+  [[ -n $newhost ]] || newhost=$(public_ip)
+  if [[ -n $newhost && -f /etc/kit/kit.env ]]; then sed -i "s#^HOST=.*#HOST=$newhost#" /etc/kit/kit.env || true; say "HOST → $newhost"; fi
+
+  systemctl daemon-reload 2>/dev/null || true
   systemctl start x-ui kit-portal 2>/dev/null || true
-  systemctl reload nginx 2>/dev/null || true
-
+  systemctl is-active -q x-ui || warn "x-ui не запустился — проверьте сертификат (LE перевыпускается на домене)."
+  if nginx -t >/dev/null 2>&1; then systemctl reload nginx 2>/dev/null || true; else warn "nginx не принял конфиг — обычно нет сертификата (/root/cert/ip|domain)."; fi
   echo
-  say "${G}${B}Восстановление успешно завершено!${N}"
-  echo "Все пользователи, пароли личного кабинета, токены и подключения сохранены."
+  say "${G}${B}Окружение восстановлено.${N} Проверьте: kit check."
+  echo "${D}Если домен сменился — используйте --import, а не --full.${N}"
   echo
 }
 
@@ -1049,8 +1329,11 @@ ${B}kit${N} $KIT_VERSION – управление сервером 3X-UI KIT
 Сервер:
   kit update            обновить kit и подписку kit-sub сейчас (пользователи и ссылки не меняются)
   kit update --manual   выключить автообновление (--auto – включить обратно)
-  kit backup            резервная копия сервера (подключения, ключи, пользователи)
-  kit restore <файл>    восстановить сервер из резервной копии (базы x-ui и портала)
+  kit backup            резервная копия (базы + переносимые данные для нового сервера)
+  kit restore [режим] <файл>
+                        --import (по умолчанию) — перенести пользователей и кабинеты на новый сервер
+                        --full — восстановить окружение (только тот же сервер и домен)
+                        --check — показать содержимое архива, ничего не менять
   kit check             проверить сервер: службы, сертификат, подписка, сайт маскировки, права
   kit fix [--dry-run]   исправить безопасное: перезапустить службы, права, автообновление, сертификат
   kit version           версия kit, панели и ядра
